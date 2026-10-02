@@ -112,6 +112,9 @@ static const char *kLibbyInsetCss =
     "html{transform:translateY(%.2fpx)!important;height:calc(100%% - %.2fpx)!important;overflow:hidden!important}";
 // Last finger contact (monotonic us) — the sleep watcher's idle timer reads it.
 static std::atomic<gint64> g_lastActivityUs{0};
+// Set from the power-button press until the tablet is back: the "asleep" notice is already on
+// screen, so touches are dropped — to the user it is asleep, even while the suspend is pending.
+static std::atomic<bool> g_sleepPending{false};
 
 // Print a native backtrace on a fatal signal (straight to fd 2 -> the persistent device log), then
 // re-raise so the watchdog still sees the crash. Our binary is unstripped, so addr2line on
@@ -3656,31 +3659,39 @@ static void sleepWatcher(std::function<void()> onSleep, std::function<void()> on
         const gint64 before = suspendedUs();
         qInfo("[sleep] suspending (%s)", pressed ? "power key" : "idle");
         fflush(nullptr);
-        if (onSleep) onSleep();   // "sleeping" notice (kept up until we are back)
-        // The panel's power regulator holds its supply for ~30 s after every screen update and
+        g_sleepPending.store(true, std::memory_order_release);
+        if (onSleep) onSleep();   // "asleep" notice (kept up until we are back)
+        // The panel's power regulator holds its supply for a while after every screen update and
         // refuses to suspend meanwhile ("g2194-regulator: Can't suspend, vpdd timer running" ->
         // EAGAIN); the notice we just painted restarts that timer. The driver reports the time left
-        // in vpdd_timeout_ms, so wait for it to reach 0, then suspend. A touch during the wait means
-        // the user is still here: cancel. systemd-suspend.service is started directly: it blocks
-        // until the system is back (or the attempt failed) and still runs the vendor sleep hooks.
-        const gint64 activityAtStart = g_lastActivityUs.load(std::memory_order_acquire);
+        // in vpdd_timeout_ms, so wait for it to reach 0, then suspend. Until then the tablet only
+        // LOOKS asleep (touches are dropped); a power press in that window "wakes" it by cancelling.
+        // systemd-suspend.service is started directly: it blocks until the system is back (or the
+        // attempt failed) and still runs the vendor sleep hooks.
         bool cancelled = false;
+        auto powerPressed = [fd] {
+            bool hit = false; struct input_event ev;
+            while (fd >= 0 && read(fd, &ev, sizeof ev) == sizeof ev)
+                if (ev.type == EV_KEY && ev.code == KEY_POWER && ev.value == 0) hit = true;
+            return hit;
+        };
         for (int attempt = 1; attempt <= 3 && !cancelled && suspendedUs() - before < 500000; ++attempt) {
-            g_usleep(1500000);   // let the notice reach the panel (and start the timer) first
             for (int i = 0; i < 300 && !cancelled; ++i) {   // <= 60 s
+                g_usleep(200000);
+                cancelled = powerPressed();
+                if (i < 10) continue;   // first 2 s: let the notice reach the panel and start the timer
                 gchar *left = nullptr;
                 const bool busy = g_file_get_contents("/sys/bus/i2c/devices/0-0048/vpdd_timeout_ms", &left, nullptr, nullptr)
                                   ? atoi(left) > 0 : i < 175;   // file missing: just wait out ~35 s
                 g_free(left);
-                cancelled = g_lastActivityUs.load(std::memory_order_acquire) != activityAtStart;
                 if (!busy) break;
-                g_usleep(200000);
             }
             if (cancelled) break;
             const int rc = system("systemctl start systemd-suspend.service");
             if (suspendedUs() - before < 500000) qInfo("[sleep] attempt %d did not suspend (rc=%d)", attempt, rc);
         }
-        if (cancelled) qInfo("[sleep] cancelled by touch");
+        if (cancelled) qInfo("[sleep] cancelled by power key before suspending");
+        g_sleepPending.store(false, std::memory_order_release);
         const gint64 slept = suspendedUs() - before;
         qInfo("[sleep] %s after %.0f s", slept >= 500000 ? "woke" : "did not suspend", slept / 1e6);
         if (fd >= 0) { struct input_event ev; while (read(fd, &ev, sizeof ev) == sizeof ev) {} }   // drop the wake press
@@ -3795,6 +3806,7 @@ private:
     // Classify the finished contact (gesture.h) and dispatch: a tap/long-press goes to the tap router
     // in main(), a swipe turns the page. Each path is independently debounced.
     void emitGesture(int dx, int dy, int x, int y, gint64 downUs) {
+        if (g_sleepPending.load(std::memory_order_acquire)) return;   // "asleep": ignore touches
         const gint64 now = g_get_monotonic_time();
         g_lastActivityUs.store(now, std::memory_order_release);
         const int dwellMs = static_cast<int>((now - downUs) / 1000);
@@ -4312,7 +4324,7 @@ int main(int argc, char **argv) {
         std::thread(sleepWatcher,
             std::function<void()>([view]{
                 QMetaObject::invokeMethod(view, [view]{
-                    view->setNotice(QStringLiteral("Sleeping soon \u2014 power to wake, touch to cancel"));
+                    view->setNotice(QStringLiteral("Asleep \u2014 press power to wake"));
                     view->holdNotice();   // no auto-hide: a second repaint would restart the panel's power timer
                 }, Qt::QueuedConnection);
             }),
