@@ -12,9 +12,10 @@ XOVI/AppLoad for the launcher icon, and a library card.
 
 - **It is only about Libby.** Every change here exists to make reading a Libby loan on the tablet
   pleasant. It is not a better general-purpose browser; for that, use upstream rmweb.
-- **It is a personal setup, shared as-is.** One person, one tablet, no releases and no prebuilt
-  download yet: you build the app yourself (about a minute once Docker and the SDK image are set
-  up) and copy it over.
+- **It is a personal setup, shared as-is.** One person, one tablet. There is a
+  [release](https://github.com/snydersaurus/rmweb/releases) with a ready-built app you unpack
+  onto the tablet, or you can build it yourself in about a minute once Docker and the SDK image
+  are set up. Either way, expect to use a terminal.
 - **The tweaks are small in kind.** rmweb drives pages with scripts; Libby's reader only answers
   to real keys, clicks and scrolls. Most of the fork is passing those through, plus a toolbar,
   sleep handling, and one opt-in TLS setting the tablet needs before Libby's servers will connect.
@@ -46,10 +47,11 @@ clauses that come closest concern scraping, extraction and server load.
 ## Getting started
 
 1. Have XOVI and AppLoad on the tablet (reManager/Vellum is the easy way).
-2. Build and package the app, then copy it to the tablet:
-   [docs/libby-wrapper.md](docs/libby-wrapper.md). It is one self-contained AppLoad folder; a
-   separate rmweb install is not needed.
-3. Turn on the TLS option if you accept its trade-off: [docs/tls.md](docs/tls.md).
+2. Get the app onto the tablet: unpack the release tarball into AppLoad's folder, or build and
+   package it yourself. Both are in [docs/libby-wrapper.md](docs/libby-wrapper.md). It is one
+   self-contained AppLoad folder; a separate rmweb install is not needed.
+3. Turn on the TLS option if you accept its trade-off: [docs/tls.md](docs/tls.md). Libby will not
+   connect without it.
 
 ## Status
 
