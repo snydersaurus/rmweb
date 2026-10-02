@@ -11,27 +11,64 @@ list. It is installed from a file.
 ## Install the prebuilt package
 
 Each [release](https://github.com/snydersaurus/rmweb/releases) carries
-`libby-reader-<version>-r0.apk` and the public half of the key it is signed with.
+`libby-reader-<version>-r0.apk` and the public half of the key it is signed with. Download the
+`.apk` first.
+
+### With the reManager desktop app
+
+1. Open reManager and connect to the tablet.
+2. **Utilities** tab, **File Browser**: go to `/home/root` and drag the `.apk` in (or use
+   **Upload File**). Wait for the transfer to finish.
+3. **Utilities** tab, **Terminal**: install it.
+
+   ```sh
+   /home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.2.0-r0.apk
+   ```
+
+   It ends with a line starting `OK:`.
+4. In the same terminal, restart the reMarkable interface with XOVI so AppLoad notices the new
+   app, and delete the uploaded file:
+
+   ```sh
+   rm /home/root/libby-reader-0.2.0-r0.apk
+   /home/root/xovi/start
+   ```
+
+   The tablet's screen restarts and asks for your passcode if you have one.
+5. On the tablet, open AppLoad and tap **Libby**.
+
+### From a terminal on your computer
 
 ```sh
 scp libby-reader-0.2.0-r0.apk root@10.11.99.1:/home/root/
-ssh root@10.11.99.1 '/home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.2.0-r0.apk'
+ssh root@10.11.99.1 '/home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.2.0-r0.apk \
+  && rm /home/root/libby-reader-0.2.0-r0.apk && /home/root/xovi/start'
 ```
 
-`--allow-untrusted` installs it without checking the signature. To have Vellum verify it instead,
-first copy `snydersaurus.rsa.pub` to `/home/root/.vellum/etc/apk/keys/` on the tablet and drop the
-flag. That makes Vellum trust anything signed with that key, so only do it if you trust this fork.
+### About `--allow-untrusted`
 
-Both steps can be done from inside reManager with its file browser and terminal. The package
-depends on `launcher`, so Vellum pulls in XOVI and AppLoad if they are missing.
+It installs the package without checking its signature. To have Vellum verify it instead, first
+copy `snydersaurus.rsa.pub` to `/home/root/.vellum/etc/apk/keys/` on the tablet and drop the flag.
+That makes Vellum trust anything signed with that key, so only do it if you trust this fork.
 
-After installing, restart xochitl through XOVI to get the Libby icon. Libby does not connect
-until an opt-in TLS option is on; the app explains it and offers to turn it on the first time it
-cannot connect ([docs/tls.md](../../docs/tls.md)).
+The package depends on `launcher`, so Vellum pulls in XOVI and AppLoad if they are missing.
 
-Remove with `vellum del libby-reader` (keeps the log and the TLS choice) or
-`vellum purge libby-reader` (clears the app folder). The browser profile in `/home/root/.rmweb` is
-left alone either way.
+### First launch
+
+1. The app shows a page about one TLS option Libby needs. Tap **Turn it on and restart** if you
+   accept it ([docs/tls.md](../../docs/tls.md) explains what it changes). The app comes back by
+   itself a few seconds later.
+2. Libby asks whether you have a library card. Sign in with your card, or choose to copy from
+   another device and enter the code it shows into the Libby app on your phone
+   (Menu, Settings, Copy To Another Device).
+3. The toolbar along the top is this app's: Shelf, B&W/Colour, Font, A-, A+, Refresh, and X to
+   quit. Tap the top of the screen to bring it up, or long-press while a book is open.
+
+### Removing it
+
+`vellum del libby-reader` keeps the log and the TLS choice; `vellum purge libby-reader` clears the
+app folder. The browser profile in `/home/root/.rmweb` and the saved Libby sign-in in
+`/home/root/.local/share/wpe` are left alone either way.
 
 ## Build the package yourself
 
@@ -53,7 +90,7 @@ submit quietly.
 
 ## Status
 
-Built with vbuild 0.0.36 and installed with `vellum add --allow-untrusted` on one Paper Pro Move
-(Vellum 0.3.1, OS 3.27.3) on 2026-10-02; the app launched afterwards and the TLS marker survived
-the install. A 0.1.0 to 0.2.0 upgrade through Vellum was also done there and kept the TLS marker.
-Verified-signature install and removal are untested.
+Built with vbuild 0.0.36. On one Paper Pro Move (Vellum 0.3.1, OS 3.27.3), 2026-10-02:
+installed with `vellum add --allow-untrusted`, upgraded 0.1.0 to 0.2.0, purged, and then installed
+from scratch through the reManager desktop app by a person following the steps above, including
+the TLS page and a Libby sign-in by setup code. Verified-signature install is untested.

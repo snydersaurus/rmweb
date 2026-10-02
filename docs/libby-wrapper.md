@@ -95,8 +95,9 @@ shared with a plain rmweb install if one exists, so a Libby sign-in carries over
 
 ## Known gaps
 
-- The packaged app was installed and launched from its own folder on 2026-10-02 (Shelf loaded,
-  TLS option picked up). Launching it from the AppLoad icon after that install is unconfirmed.
+- The packaged app has been through a from-scratch install by hand (2026-10-02): package
+  installed with reManager, launched from the AppLoad icon, TLS page tapped, app restarted
+  itself, Libby signed in by setup code.
 - Sleep/wake by power button is confirmed (2026-10-02: suspended on the second attempt, woke on
   the power button after 63 s). The panel regulator refuses suspend while its `vpdd` timer runs
   after a screen update, so the watcher polls `vpdd_timeout_ms` and retries; expect a few seconds

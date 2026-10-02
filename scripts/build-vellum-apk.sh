@@ -9,6 +9,7 @@ set -euo pipefail
 # vbuild ships only as an x86_64 Linux binary and drives Docker itself, so it runs here in an
 # emulated x86_64 container that talks to the host's Docker socket; its work and key directories
 # are mounted at their host paths because the containers vbuild starts see host paths.
+# SOURCE_DATE_EPOCH is the recipe's last commit time; without it every installed file is dated 1970.
 # The signing key lives in build/vbuild/home/.config/vbuild/ (not in git): keep it if you want
 # later versions to carry the same signature.
 cd "$(dirname "$0")/.."
@@ -31,7 +32,8 @@ cp packaging/vellum/libby-reader/VELBUILD "$WORK/"
 docker pull -q --platform linux/amd64 ghcr.io/eeems/vbuild-builder:main >/dev/null
 docker run --rm --platform linux/amd64 \
   -v /var/run/docker.sock:/var/run/docker.sock -v "$B:$B" \
-  -e HOME="$B/home" -e CARCH=aarch64 -e VBUILD_KEY_NAME="$KEY" -w "$WORK" docker:cli \
+  -e HOME="$B/home" -e CARCH=aarch64 -e VBUILD_KEY_NAME="$KEY" \
+  -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct -- packaging/vellum/libby-reader)" -w "$WORK" docker:cli \
   sh -c "apk add -q bash openssl >/dev/null 2>&1; '$B/vbuild-x86_64-musl' all 2>&1 | grep -v 'listxattr'"
 cp "$WORK"/dist/aarch64/*.apk dist/vellum/
 cp "$B/home/.config/vbuild/$KEY.rsa.pub" dist/vellum/
