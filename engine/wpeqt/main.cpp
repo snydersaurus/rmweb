@@ -3011,6 +3011,8 @@ public Q_SLOTS:
         m_noticeTimer.start(kNoticeMs);          // re-arms if a second notice lands quickly
         scheduleDirty(pillZone());
     }
+    void holdNotice()  { m_noticeTimer.stop(); }                      // keep the current toast up until clearNotice()
+    void clearNotice() { if (!m_notice.isEmpty()) { m_noticeTimer.stop(); m_notice.clear(); scheduleDirty(pillZone()); } }
     void setReadProgress(double f) {             // reading position 0..1; -1 hides the bar.
         if (f != m_readProgress) markDirty(progZone());   // ride the next present (content frame
         m_readProgress = f;                      // always follows) — a separate present here would
@@ -3654,23 +3656,38 @@ static void sleepWatcher(std::function<void()> onSleep, std::function<void()> on
         const gint64 before = suspendedUs();
         qInfo("[sleep] suspending (%s)", pressed ? "power key" : "idle");
         fflush(nullptr);
-        if (onSleep) onSleep();   // "sleeping" notice
-        // The panel's power regulator refuses to suspend for a few seconds after a screen update
-        // ("g2194-regulator: Can't suspend, vpdd timer running" -> EAGAIN), and we have just painted
-        // the notice. So wait, then retry a few times. Starting systemd-suspend.service directly
-        // blocks until the system is back (or the attempt failed) and still runs the sleep hooks.
-        for (int attempt = 1; attempt <= 5 && suspendedUs() - before < 500000; ++attempt) {
-            g_usleep(attempt == 1 ? 4000000 : 3000000);
+        if (onSleep) onSleep();   // "sleeping" notice (kept up until we are back)
+        // The panel's power regulator holds its supply for ~30 s after every screen update and
+        // refuses to suspend meanwhile ("g2194-regulator: Can't suspend, vpdd timer running" ->
+        // EAGAIN); the notice we just painted restarts that timer. The driver reports the time left
+        // in vpdd_timeout_ms, so wait for it to reach 0, then suspend. A touch during the wait means
+        // the user is still here: cancel. systemd-suspend.service is started directly: it blocks
+        // until the system is back (or the attempt failed) and still runs the vendor sleep hooks.
+        const gint64 activityAtStart = g_lastActivityUs.load(std::memory_order_acquire);
+        bool cancelled = false;
+        for (int attempt = 1; attempt <= 3 && !cancelled && suspendedUs() - before < 500000; ++attempt) {
+            g_usleep(1500000);   // let the notice reach the panel (and start the timer) first
+            for (int i = 0; i < 300 && !cancelled; ++i) {   // <= 60 s
+                gchar *left = nullptr;
+                const bool busy = g_file_get_contents("/sys/bus/i2c/devices/0-0048/vpdd_timeout_ms", &left, nullptr, nullptr)
+                                  ? atoi(left) > 0 : i < 175;   // file missing: just wait out ~35 s
+                g_free(left);
+                cancelled = g_lastActivityUs.load(std::memory_order_acquire) != activityAtStart;
+                if (!busy) break;
+                g_usleep(200000);
+            }
+            if (cancelled) break;
             const int rc = system("systemctl start systemd-suspend.service");
             if (suspendedUs() - before < 500000) qInfo("[sleep] attempt %d did not suspend (rc=%d)", attempt, rc);
         }
+        if (cancelled) qInfo("[sleep] cancelled by touch");
         const gint64 slept = suspendedUs() - before;
         qInfo("[sleep] %s after %.0f s", slept >= 500000 ? "woke" : "did not suspend", slept / 1e6);
         if (fd >= 0) { struct input_event ev; while (read(fd, &ev, sizeof ev) == sizeof ev) {} }   // drop the wake press
         const gint64 t = g_get_monotonic_time();
         ignoreKeyUntil = t + 2000000;
         g_lastActivityUs.store(t, std::memory_order_release);
-        if (slept >= 500000 && onWake) onWake();
+        if (onWake) onWake();   // also after a cancelled/failed attempt: it clears the notice
     }
 }
 
@@ -4295,11 +4312,12 @@ int main(int argc, char **argv) {
         std::thread(sleepWatcher,
             std::function<void()>([view]{
                 QMetaObject::invokeMethod(view, [view]{
-                    view->setNotice(QStringLiteral("Sleeping \u2014 press power to wake"));
+                    view->setNotice(QStringLiteral("Sleeping soon \u2014 power to wake, touch to cancel"));
+                    view->holdNotice();   // no auto-hide: a second repaint would restart the panel's power timer
                 }, Qt::QueuedConnection);
             }),
             std::function<void()>([view, &engine]{
-                QMetaObject::invokeMethod(view, [view]{ view->clearGhosting(); }, Qt::QueuedConnection);
+                QMetaObject::invokeMethod(view, [view]{ view->clearNotice(); view->clearGhosting(); }, Qt::QueuedConnection);
                 engine.checkLoanExpiry();
             })).detach();
         { auto *loanTimer = new QTimer(&app);   // also while awake: every 10 min (first check after 1 min)

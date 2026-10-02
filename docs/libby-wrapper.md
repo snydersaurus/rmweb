@@ -92,7 +92,10 @@ On this Mac Docker Desktop's CLI is at `~/.docker/bin` and may need adding to `P
 
 ## Known gaps
 
-- Sleep/wake by power button was fixed after a first failure but not yet confirmed by hand.
+- Sleep/wake by power button is confirmed (2026-10-02: suspended on the second attempt, woke on
+  the power button after 63 s). The panel regulator refuses suspend while its `vpdd` timer runs
+  after a screen update, so the watcher polls `vpdd_timeout_ms` and retries; expect a few seconds
+  to about half a minute between the press and the actual sleep. Idle sleep is unconfirmed.
 - Offline reading was verified on one 82-page book (84 page turns with wifi off); long books are
   unproven.
 - Changing the font with a book open may leave Libby's page breaks slightly off until the book is
