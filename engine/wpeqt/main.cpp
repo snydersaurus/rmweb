@@ -2694,7 +2694,8 @@ public:
         }
         for (int i = 0; i < 256; ++i)   // factor by luma: darken mid-grey, keep black/white pinned
             m_toneLut[i] = i == 0 ? 1.0f : std::pow(i / 255.0f, m_textGamma) * 255.0f / i;
-        m_partial = qgetenv("RMWEB_PARTIAL") == "1";   // partial present is OPT-IN: the vendor
+        // AppLoad window: content damage must be tracked, or only chrome rects ever reach the window.
+        m_partial = qgetenv("RMWEB_PARTIAL") == "1" || g_qtfb;   // partial present is OPT-IN: the vendor
         // EPRenderLoop still crashes intermittently on region presents under storms even with the
         // idempotent gate (device-verified 2026-09-25); full-screen presents are the safe default.
         connect(&m_settleFlash, &QTimer::timeout, this, [this]{
@@ -2843,7 +2844,9 @@ public:
     // Libby toolbar geometry: four equal text buttons, then Power in its usual right-hand slot.
     static constexpr int kLibbyN = 6;
     static constexpr Hit kLibbyBtns[kLibbyN] = { LShelf, LMode, LFont, ZoomOut, ZoomIn, LClean };
-    int libbyBtnW() const { return (int(width()) - kPowerW()) / kLibbyN; }
+    // As an AppLoad window there is no X: AppLoad's own window bar closes (and minimises) the app,
+    // and an X of ours next to it was easy to mistake for minimise. The buttons take the full width.
+    int libbyBtnW() const { return (int(width()) - (g_qtfb ? 0 : kPowerW())) / kLibbyN; }
     static int libbyIndex(Hit h) { for (int i = 0; i < kLibbyN; ++i) if (kLibbyBtns[i] == h) return i; return -1; }
     bool bwFast() const { return m_bwFast; }
     // Right-cluster geometry (panel px) — ONE source for hit-test, pressed overlay and painting.
@@ -2860,7 +2863,7 @@ public:
     Hit hitChrome(int x, int y) const {
         if (!m_chromeOn || y >= kBarH()) return None;
         const ChromeX c = chromeLayout();
-        if (g_libbyMode) return x >= c.powerX ? Power : kLibbyBtns[qMin(kLibbyN - 1, x / qMax(1, libbyBtnW()))];
+        if (g_libbyMode) return (!g_qtfb && x >= c.powerX) ? Power : kLibbyBtns[qMin(kLibbyN - 1, x / qMax(1, libbyBtnW()))];
         if (x < kBackX())         return Back;
         if (x < kFwdX())          return Fwd;
         if (x < kRelX())          return Reload;
@@ -3338,7 +3341,7 @@ private:
                 const qreal x = chromeHitRect(h).right();
                 p->fillRect(QRectF(x - 1, kBarH() * 0.25, 2, kBarH() * 0.5), Qt::black);
             }
-            pen(true); drawChromeIcon(p, Power);
+            if (!g_qtfb) { pen(true); drawChromeIcon(p, Power); }
             if (m_pressed != None) {
                 const QRectF r = chromeHitRect(m_pressed).adjusted(6, 6, -6, -6);
                 p->setPen(Qt::NoPen); p->setBrush(Qt::black);
@@ -3645,7 +3648,7 @@ private:
         // under frame storms) but always on while EDITING: keyboard/echo updates are human-paced
         // (>=120 ms coalesced, gate-serialized), and full-screen repaints per keystroke are exactly
         // the "typing redraws everything" bug (user report 2026-09-26).
-        const bool regional = m_partial || m_editing || g_qtfb;   // a window takes exact damage rects
+        const bool regional = m_partial || m_editing;   // (an AppLoad window always tracks damage: m_partial)
         if (regional && m_dirtyAccum.isNull()) { m_dirty = false; return; }
         m_lastPresentHadContent = hadContent;
         m_dirty = false; m_inFlight = true;
