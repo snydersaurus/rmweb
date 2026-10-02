@@ -1,0 +1,8 @@
+{
+  "name": "Libby",
+  "application": "/home/root/rmweb/libby-entry.sh",
+  "workingDirectory": "/home/root/rmweb",
+  "qtfb": false,
+  "aspectRatio": "original",
+  "disablesWindowedMode": true
+}
