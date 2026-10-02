@@ -1,0 +1,8 @@
+{
+  "name": "Libby window (experiment)",
+  "application": "/home/root/xovi/exthome/appload/libby-window/libby-window.sh",
+  "workingDirectory": "/home/root/xovi/exthome/appload/libby-window",
+  "qtfb": true,
+  "aspectRatio": "move",
+  "disablesWindowedMode": false
+}

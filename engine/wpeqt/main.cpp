@@ -40,6 +40,9 @@
 #include <dirent.h>
 #include <poll.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <algorithm>
 #include <atomic>
@@ -110,6 +113,73 @@ static const int kBookFontCount = int(sizeof kBookFonts / sizeof kBookFonts[0]);
 // block of position:fixed descendants, so they shift down with it instead of staying under the bar.
 static const char *kLibbyInsetCss =
     "html{transform:translateY(%.2fpx)!important;height:calc(100%% - %.2fpx)!important;overflow:hidden!important}";
+// --- EXPERIMENT (branch appload-window): run as an AppLoad window instead of taking the screen --
+// AppLoad's "qtfb" gives an external app a shared-memory framebuffer shown in a window inside the
+// running reMarkable UI, and sends that window's touch input back over a unix socket. With
+// QTFB_KEY in the environment (AppLoad sets it for manifests with "qtfb": true) we connect to it:
+// xochitl keeps running, nothing is stopped or restored, and sleep/power stay xochitl's job.
+// Wire format written from the protocol as used by AppLoad v0.5.3 (aarch64 layout): client
+// messages are 24 bytes {u8 type; pad; 5 x i32}, server messages 32 bytes {u8 type; pad to 8; ...}.
+struct QtfbClientMsg { uint8_t type; int32_t a, b, c, d, e; };
+struct QtfbServerMsg {
+    uint8_t type;
+    union {
+        struct { int32_t shmKey; size_t shmSize; } init;
+        struct { int32_t inputType, devId, x, y, d; } input;
+    };
+};
+static_assert(sizeof(QtfbClientMsg) == 24 && sizeof(QtfbServerMsg) == 32, "qtfb wire layout");
+enum { kQtfbInit = 0, kQtfbUpdate = 1, kQtfbTerminate = 3, kQtfbUserInput = 4, kQtfbSetRefreshMode = 5,
+       kQtfbFullRefresh = 6 };
+enum { kQtfbFmtRmppRgba = 2, kQtfbFmtMoveRgba = 5 };            // RGBA8888 at the panel's native size
+enum { kQtfbModeFast = 1, kQtfbModeContent = 3, kQtfbModeUi = 4 };
+enum { kQtfbTouchPress = 0x10, kQtfbTouchRelease = 0x11, kQtfbTouchUpdate = 0x12 };
+struct QtfbSink {
+    int sock = -1;
+    uchar *shm = nullptr;
+    int w = 0, h = 0;
+    QImage img;                 // wraps shm (RGBA8888): the view paints straight into the window
+    int contentPresents = 0;    // since the last full refresh (B&W fast mode cadence)
+    void send(uint8_t type, int a = 0, int b = 0, int c = 0, int d = 0, int e = 0) const {
+        const QtfbClientMsg m{ type, a, b, c, d, e };
+        if (::send(sock, &m, sizeof m, MSG_NOSIGNAL) < 0) qWarning("[qtfb] send failed: %s", strerror(errno));
+    }
+};
+static QtfbSink *g_qtfb = nullptr;
+static bool qtfbConnect() {
+    const char *key = getenv("QTFB_KEY");
+    if (!key || !*key) return false;
+    bool move = true;   // Paper Pro Move unless the device tree says otherwise
+    { gchar *model = nullptr;
+      if (g_file_get_contents("/proc/device-tree/model", &model, nullptr, nullptr) && model)
+          move = strstr(model, "Chiappa") != nullptr || strstr(model, "Move") != nullptr;
+      g_free(model); }
+    const int sock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    struct sockaddr_un addr{}; addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, "/tmp/qtfb.sock", sizeof(addr.sun_path) - 1);
+    if (sock < 0 || ::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof addr) != 0) {
+        qWarning("[qtfb] cannot connect to /tmp/qtfb.sock: %s", strerror(errno)); return false;
+    }
+    QtfbClientMsg init{ kQtfbInit, int32_t(strtoul(key, nullptr, 10)), 0, 0, 0, 0 };
+    reinterpret_cast<uint8_t*>(&init.b)[0] = move ? kQtfbFmtMoveRgba : kQtfbFmtRmppRgba;   // {i32 key; u8 fmt}
+    QtfbServerMsg reply{};
+    if (::send(sock, &init, sizeof init, MSG_NOSIGNAL) < 0 || recv(sock, &reply, sizeof reply, 0) < 1) {
+        qWarning("[qtfb] init failed: %s", strerror(errno)); return false;
+    }
+    char name[32]; snprintf(name, sizeof name, "/qtfb_%d", reply.init.shmKey);
+    const int fd = shm_open(name, O_RDWR, 0);
+    void *mem = fd >= 0 ? mmap(nullptr, reply.init.shmSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0) : MAP_FAILED;
+    if (mem == MAP_FAILED) { qWarning("[qtfb] cannot map %s: %s", name, strerror(errno)); return false; }
+    auto *q = new QtfbSink;
+    q->sock = sock; q->shm = static_cast<uchar*>(mem);
+    q->w = move ? 954 : 1620; q->h = move ? 1696 : 2160;
+    if (size_t(q->w) * q->h * 4 > reply.init.shmSize) { qWarning("[qtfb] shm too small (%zu)", reply.init.shmSize); return false; }
+    q->img = QImage(q->shm, q->w, q->h, q->w * 4, QImage::Format_RGBA8888);
+    q->img.fill(Qt::white);
+    g_qtfb = q;
+    qInfo("[qtfb] window framebuffer %dx%d (%s, %zu bytes)", q->w, q->h, name, reply.init.shmSize);
+    return true;
+}
 // Last finger contact (monotonic us) — the sleep watcher's idle timer reads it.
 static std::atomic<gint64> g_lastActivityUs{0};
 // Set from the power-button press until the tablet is back: the "asleep" notice is already on
@@ -3003,6 +3073,7 @@ public Q_SLOTS:
     // demand. Retries once the panel is free (a present in flight gets the gate first); the settle
     // flash is stopped — a pending one would be redundant right after this.
     void clearGhosting() {
+        if (g_qtfb && !m_exiting) { g_qtfb->contentPresents = 0; g_qtfb->send(kQtfbFullRefresh); return; }
         if (!m_epd || m_exiting) return;
         if (m_inFlight) { QTimer::singleShot(500, this, [this]{ clearGhosting(); }); return; }
         m_settleFlash.stop();
@@ -3075,7 +3146,10 @@ public Q_SLOTS:
     // B&W fast mode (settings page): present grayscale frames — the panel's fast mono waveform develops
     // them fully, while colour content under a fast waveform stays washed out until a slow full pass.
     // And force that fast waveform ourselves per content present (presentFast below).
-    void setBwFast(bool v)         { if (v != m_bwFast) { m_bwFast = v; m_grayDirty = true; markDirtyAll(); schedule(); } }   // full repaint covers the Libby bar's mode label
+    void setBwFast(bool v) {
+        if (g_qtfb) g_qtfb->send(kQtfbSetRefreshMode, v ? kQtfbModeFast : kQtfbModeContent);   // window: pick the waveform class
+        if (v != m_bwFast) { m_bwFast = v; m_grayDirty = true; markDirtyAll(); schedule(); }
+    }   // full repaint covers the Libby bar's mode label
     // Text boost (colour mode): darken text via a luma tone curve on the frame (paint() below).
     void setTextBoost(bool v)      { if (v != m_textBoost) { m_textBoost = v; m_tonedDirty = true; markDirtyAll(); schedule(); } }
     // Settle flash (settings page): one full-quality develop after the page goes quiet. No repaint
@@ -3571,7 +3645,7 @@ private:
         // under frame storms) but always on while EDITING: keyboard/echo updates are human-paced
         // (>=120 ms coalesced, gate-serialized), and full-screen repaints per keystroke are exactly
         // the "typing redraws everything" bug (user report 2026-09-26).
-        const bool regional = m_partial || m_editing;
+        const bool regional = m_partial || m_editing || g_qtfb;   // a window takes exact damage rects
         if (regional && m_dirtyAccum.isNull()) { m_dirty = false; return; }
         m_lastPresentHadContent = hadContent;
         m_dirty = false; m_inFlight = true;
@@ -3583,7 +3657,19 @@ private:
         m_nextGuardTouch = false;
         const QRect dirty = alignOut8(m_dirtyAccum);
         m_dirtyAccum = QRect();
-        if (regional && dirty != QRect(0, 0, kPanelW, kPanelH)) {
+        if (g_qtfb) {
+            // AppLoad window: paint the damage straight into the shared framebuffer and tell the
+            // server which rect changed. No scene graph, so "frameSwapped" is simply the next tick.
+            m_lastPresentRect = dirty.isNull() ? QRect(0, 0, kPanelW, kPanelH) : dirty;
+            { QPainter p(&g_qtfb->img); p.setClipRect(m_lastPresentRect); paint(&p); }
+            g_qtfb->send(kQtfbUpdate, 1, m_lastPresentRect.x(), m_lastPresentRect.y(),
+                         m_lastPresentRect.width(), m_lastPresentRect.height());
+            if (hadContent && m_bwFast && ++g_qtfb->contentPresents >= qtfbFullEvery()) {
+                g_qtfb->contentPresents = 0;
+                g_qtfb->send(kQtfbFullRefresh);   // fast waveform leaves residue: clean every N turns
+            }
+            QTimer::singleShot(0, this, [this]{ onFrameSwapped(); });
+        } else if (regional && dirty != QRect(0, 0, kPanelW, kPanelH)) {
             m_lastPresentRect = dirty;
             qCDebug(lcEngine, "[t][gui] present dirty=%dx%d@%d,%d", dirty.width(), dirty.height(),
                     dirty.x(), dirty.y());
@@ -3593,6 +3679,11 @@ private:
             update();                            // -> scene render -> EPRenderLoop present to panel
         }
         m_fallback.start(kFallbackMs);
+    }
+    static int qtfbFullEvery() {
+        static const int n = qEnvironmentVariableIsSet("RMWEB_FULL_EVERY")
+            ? qMax(1, qEnvironmentVariableIntValue("RMWEB_FULL_EVERY")) : 6;
+        return n;
     }
     void releaseGate() {
         if (!m_inFlight) return;   // idempotent: frameSwapped + fallback + the dwell single-shot can
@@ -3809,6 +3900,7 @@ Q_SIGNALS:
 public Q_SLOTS:
     void run() {
         blockSigterm(true);   // TERM belongs to the GUI thread between presents, not here
+        if (g_qtfb) { runQtfb(); return; }
         int fd = openByName("Elan touch input");
         if (fd < 0) { qWarning("[touch] 'Elan touch input' node not found"); return; }
         // The grab is NOT optional: without it the epaper QPA's broken touch dispatch reaches
@@ -3875,6 +3967,34 @@ public Q_SLOTS:
         close(fd);
     }
 private:
+    // AppLoad window: touches arrive as messages on the qtfb socket, in framebuffer pixels. Follow
+    // the first finger from press to release and hand the result to the same gesture classifier.
+    void runQtfb() {
+        int id = -1, x0 = 0, y0 = 0, lx = 0, ly = 0, seen = 0; gint64 downUs = 0;
+        qInfo("[touch] reading input from the AppLoad window");
+        while (!m_stop.load()) {
+            struct pollfd pfd = { g_qtfb->sock, POLLIN, 0 };
+            if (poll(&pfd, 1, 500) <= 0) continue;
+            QtfbServerMsg m{};
+            const ssize_t n = recv(g_qtfb->sock, &m, sizeof m, 0);
+            if (n == 0 || (n < 0 && errno != EAGAIN && errno != EINTR)) {
+                qInfo("[qtfb] server closed the window — leaving");
+                kill(getpid(), SIGTERM);   // same clean exit as a TERM from outside (this thread blocks TERM)
+                return;
+            }
+            if (n < 1 || m.type != kQtfbUserInput) continue;
+            const auto &in = m.input;
+            if (seen < 6) { ++seen; qInfo("[qtfb] input type=0x%x dev=%d x=%d y=%d d=%d", in.inputType, in.devId, in.x, in.y, in.d); }
+            if (in.inputType == kQtfbTouchPress && id < 0) {
+                id = in.devId; x0 = lx = in.x; y0 = ly = in.y; downUs = g_get_monotonic_time();
+            } else if (in.inputType == kQtfbTouchUpdate && in.devId == id) {
+                lx = in.x; ly = in.y;
+            } else if (in.inputType == kQtfbTouchRelease && in.devId == id) {
+                id = -1;
+                emitGesture(lx - x0, ly - y0, qBound(0, lx, kPanelW - 1), qBound(0, ly, kPanelH - 1), downUs);
+            }
+        }
+    }
     static int openByName(const char *want) {
         DIR *dir = opendir("/dev/input");
         if (!dir) return -1;
@@ -4118,6 +4238,7 @@ int main(int argc, char **argv) {
         const QSize s = scr->size();
         if (s.width() > 200 && s.height() > 200) { kPanelW = s.width(); kPanelH = s.height(); }
     }
+    if (qtfbConnect()) { kPanelW = g_qtfb->w; kPanelH = g_qtfb->h; }   // AppLoad window: its size is the panel
     kPhysW = kPanelW; kPhysH = kPanelH;   // RMWEB_PANEL below fakes the UI size, not the hardware
     // Dev override: RMWEB_PANEL=WxH fakes the panel geometry (e.g. 954x1696 to dry-run the
     // Paper Pro Move UI on a Paper Pro). Applied AFTER the QPA probe so it always wins;
@@ -4170,6 +4291,14 @@ int main(int argc, char **argv) {
         });
     } else {
         // --- display mode: paint frames into a full-screen QtQuick item (epaper QPA) ---
+        WpeView *view = nullptr;
+        QQuickWindow *win = nullptr;
+        if (g_qtfb) {
+            // AppLoad window: no Qt window at all. The view is only a painter here — presentNext
+            // calls its paint() onto the shared framebuffer.
+            view = new WpeView;
+            view->setSize(QSizeF(kPanelW, kPanelH));
+        } else {
         qmlRegisterType<WpeView>("rmweb", 1, 0, "WpeView");
         auto *qmlEngine = new QQmlEngine(&app);
         // No "engine" context property: the chrome is C++ (B2), and kQml doesn't reference engine.
@@ -4188,10 +4317,11 @@ int main(int argc, char **argv) {
             return 2;
         }
         QObject *root = comp->create();
-        auto *view = root ? root->findChild<WpeView*>("view") : nullptr;
+        view = root ? root->findChild<WpeView*>("view") : nullptr;
         if (!view) { qWarning() << "[qml] WpeView not found"; return 3; }
         root->setParent(qmlEngine);   // engine owns the QML tree -> well-defined teardown order
-        auto *win = qobject_cast<QQuickWindow*>(root);
+        win = qobject_cast<QQuickWindow*>(root);
+        }
         QObject::connect(&engine, &WpeEngine::frameReady, view,
                          [view](const QImage &img, int frame, const QRect &dirty) {
             const gint64 t = g_get_monotonic_time();
@@ -4409,7 +4539,8 @@ int main(int argc, char **argv) {
             }, Qt::QueuedConnection);
         touchThread.start();
         // Power button / idle -> suspend to RAM; on wake, one full refresh so the panel is clean.
-        std::thread(sleepWatcher,
+        // (Not as an AppLoad window: xochitl is running and owns sleep and the power button.)
+        if (!g_qtfb) std::thread(sleepWatcher,
             std::function<void()>([view]{
                 QMetaObject::invokeMethod(view, [view]{
                     view->setNotice(QStringLiteral("Asleep \u2014 press power to wake"));
