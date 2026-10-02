@@ -33,10 +33,11 @@ package() {
 }
 
 postinstall() {
+	# No apostrophes in this text: vbuild tokenises function bodies with shlex.
 	cat <<MSG
 libby-reader: installed. Restart xochitl through XOVI to see the Libby icon in AppLoad.
 
-Libby's servers will refuse the connection until an opt-in TLS option is on. It widens, for this
+The Libby servers will refuse the connection until an opt-in TLS option is on. It widens, for this
 app only, the cipher list reMarkable ships. The app explains this and offers to turn it on the
 first time it cannot connect. What it changes:
   https://github.com/snydersaurus/rmweb/blob/libby-key-paging/docs/tls.md
