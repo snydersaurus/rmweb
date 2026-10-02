@@ -41,28 +41,9 @@ On this Mac Docker Desktop's CLI is at `~/.docker/bin` and may need adding to `P
 ## Tablet-side setup that is not in this repo
 
 1. Install the upstream release (`docs/install.md`), then run `scripts/deploy-libby.sh`.
-2. **TLS.** The device policy (`/etc/ssl/openssl.cnf.d/10-reduce-tls-ciphers.cnf`) allows only
-   ECDHE-ECDSA suites on TLS 1.2, and Libby's API hosts need ECDHE-RSA. Create
-   `/home/root/rmweb/openssl-rmweb.cnf`:
-
-   ```ini
-   openssl_conf = openssl_init
-
-   [openssl_init]
-   ssl_conf = ssl_configuration
-
-   [ssl_configuration]
-   system_default = system_default_tls
-
-   [system_default_tls]
-   MinProtocol = TLSv1.2
-   Ciphersuites = TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256:TLS_AES_128_CCM_SHA256
-   CipherString = ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-CCM:ECDHE-ECDSA-AES128-CCM:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-CHACHA20-POLY1305
-   ```
-
-   and append `export OPENSSL_CONF=/home/root/rmweb/openssl-rmweb.cnf` to
-   `/home/root/rmweb/rmweb-env.sh`. An upstream upgrade replaces that file, so the line has to be
-   re-added afterwards.
+2. **TLS.** Libby's API hosts cannot complete a handshake under the device's system TLS policy.
+   rmweb needs the opt-in per-app config in `device/openssl-rmweb.cnf`; what it changes, how to
+   install, verify and undo it are in [tls.md](tls.md). No script installs it.
 3. Sign in to Libby once (a setup code from another device works).
 4. Reading settings: `bwFast=1` in `/home/root/.rmweb/settings.txt` (or the toolbar's B&W button);
    the Libby entry sets `RMWEB_FULL_EVERY=6` (cleaning flash every 6 presents).

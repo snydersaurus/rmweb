@@ -1,3 +1,55 @@
+# rmweb, with a Libby reading mode for the Paper Pro Move
+
+This is a personal fork of [exp78/rmweb](https://github.com/exp78/rmweb) (v0.9.7), a WPE WebKit
+browser for reMarkable e-ink tablets. The fork makes Libby's web reader (libbyapp.com) usable on a
+**reMarkable Paper Pro Move**, so library loans can be read on the tablet through Libby's own
+reader.
+
+It is unofficial and not affiliated with OverDrive, Libby or reMarkable. It needs developer mode,
+XOVI/AppLoad for the launcher icon, and a library card.
+
+## What the fork adds
+
+- **Page turns and taps in Libby's reader.** Swipes and edge taps are sent as real arrow keys, and
+  taps as real clicks, because the reader ignores rmweb's script-driven scrolling.
+- **Working lists and search.** Real scroll events for Libby's self-filling lists; Enter is sent
+  after typing into a search box.
+- **A reading toolbar** in place of the browser bar: Shelf, B&W/Colour, Font, A-, A+, Refresh, close.
+- **Book font choice**, cycling the typefaces installed on the tablet.
+- **Sleep and wake** with the power button while a book is open, plus sleep after 15 idle minutes.
+- **Reading on after the connection drops.** Libby's reader loads the whole book when it opens, so
+  an open book keeps paging offline and across sleep. Closing rmweb drops it.
+- **A build shortcut** that recompiles rmweb's own program in about a minute without building WebKit.
+
+## What it deliberately does not do
+
+- It does not touch DRM, download books, or save any book content to disk. Libby's reader renders
+  the book and checks the loan; the book exists only in the open session's memory.
+- It leaves the reader when the loan's due date passes.
+- It does not install the TLS configuration Libby needs. That is an explicit opt-in:
+  see [docs/tls.md](docs/tls.md).
+
+Whether a modified client is acceptable under OverDrive's terms is for each user to judge; the
+clauses that come closest concern scraping, extraction and server load.
+
+## Getting started
+
+1. Install the upstream release on the tablet ([docs/install.md](docs/install.md)).
+2. Build and deploy this fork's binary and the Libby launcher, then do the one-time tablet setup:
+   [docs/libby-wrapper.md](docs/libby-wrapper.md).
+3. Apply the TLS config if you accept its trade-off: [docs/tls.md](docs/tls.md).
+
+## Status
+
+Tested on one device: Paper Pro Move, OS 3.27.3, against Libby as it was in October 2026. Libby's
+web app can change at any time and break this. Known gaps are listed at the end of
+[docs/libby-wrapper.md](docs/libby-wrapper.md). Upstream's Paper Pro behaviour outside Libby is
+meant to be unchanged, but has not been re-tested on a Paper Pro.
+
+The original README follows.
+
+---
+
 # rmweb
 
 A native **WPE WebKit** web browser for the **reMarkable Paper Pro** e-ink tablet.
