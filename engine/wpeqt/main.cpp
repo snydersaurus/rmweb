@@ -215,9 +215,16 @@ static std::string slurp(const std::string &path) {
     fclose(f);
     return out;
 }
+// Install root of the bundle (bin/, lib/, share/, logs). The launcher sets RMWEB_ROOT when the
+// bundle lives somewhere other than the default, e.g. inside an AppLoad app folder.
+static std::string rmwebRoot() {
+    const char *r = getenv("RMWEB_ROOT");
+    return (r && *r) ? std::string(r) : std::string("/home/root/rmweb");
+}
+
 static std::string readerDir() {
     const char *d = getenv("RMWEB_READER_DIR");
-    return (d && *d) ? std::string(d) : std::string("/home/root/rmweb/share/reader");
+    return (d && *d) ? std::string(d) : rmwebRoot() + "/share/reader";
 }
 static void replaceAll(std::string &s, const std::string &from, const std::string &to) {
     for (size_t p = 0; (p = s.find(from, p)) != std::string::npos; p += to.size())
@@ -795,7 +802,7 @@ public Q_SLOTS:
         // loadInitial() runs from its callback. Off => load immediately. A compile failure still loads
         // (unfiltered) so the page works.
         if (m_settings.block && qgetenv("RMWEB_BLOCK") != "0") {
-            WebKitUserContentFilterStore *store = webkit_user_content_filter_store_new("/home/root/rmweb/cfstore");
+            WebKitUserContentFilterStore *store = webkit_user_content_filter_store_new((rmwebRoot() + "/cfstore").c_str());
             GBytes *src = g_bytes_new_static(kBlockRules, strlen(kBlockRules));
             webkit_user_content_filter_store_save(store, "rmweb-block", src, m_cancel, &WpeEngine::onFilterSaved, this);
             g_bytes_unref(src);
@@ -938,7 +945,7 @@ public Q_SLOTS:
     // First enable of blocking at runtime (startup had it off): same store-save compile as startup,
     // but the callback only adopts the filter — it must NOT kick a fresh initial load.
     void compileBlockFilter() {
-        WebKitUserContentFilterStore *store = webkit_user_content_filter_store_new("/home/root/rmweb/cfstore");
+        WebKitUserContentFilterStore *store = webkit_user_content_filter_store_new((rmwebRoot() + "/cfstore").c_str());
         GBytes *src = g_bytes_new_static(kBlockRules, strlen(kBlockRules));
         webkit_user_content_filter_store_save(store, "rmweb-block", src, m_cancel,
                                               &WpeEngine::onFilterToggleSaved, this);
@@ -4389,7 +4396,7 @@ int main(int argc, char **argv) {
         if (const int grabMs = qEnvironmentVariableIntValue("RMWEB_GRAB_MS"); grabMs > 0 && win) {
             QTimer::singleShot(grabMs, win, [win]{
                 QImage g = win->grabWindow();
-                if (!g.isNull() && g.save("/home/root/rmweb/grab.png")) qInfo("[grab] saved %dx%d", g.width(), g.height());
+                if (!g.isNull() && g.save(QString::fromStdString(rmwebRoot() + "/grab.png"))) qInfo("[grab] saved %dx%d", g.width(), g.height());
                 else qInfo("[grab] FAILED null=%d", g.isNull());
             });
         }
@@ -4490,7 +4497,7 @@ int main(int argc, char **argv) {
         QObject::connect(view, &WpeView::chromeShownChanged, &app, [&engine](bool on) { engine.setChromeShown(on); });
         if (win) QObject::connect(&engine, &WpeEngine::dbgGrab, win, [win] {
             const QImage g = win->grabWindow();
-            qInfo("[grab] %s", !g.isNull() && g.save("/home/root/rmweb/grab.png") ? "saved" : "FAILED");
+            qInfo("[grab] %s", !g.isNull() && g.save(QString::fromStdString(rmwebRoot() + "/grab.png")) ? "saved" : "FAILED");
         }, Qt::QueuedConnection);
         // Diagnostic: RMWEB_DEBUG_JSFILE=/path — poll the file every second, run it when it changes.
         if (qEnvironmentVariableIsSet("RMWEB_DEBUG_JSFILE")) {

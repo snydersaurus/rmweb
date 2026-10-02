@@ -48,15 +48,26 @@ What it changes and what it does not:
 It is a step outside the profile reMarkable certified the device with, for one application. That
 is the trade-off; it is why no script in this repo installs it for you.
 
-### Install (by hand, on purpose)
+### Turn it on (by hand, on purpose)
+
+**Packaged Libby app** (`/home/root/xovi/exthome/appload/libby`, built by
+`scripts/package-libby.sh`): the config ships inside the app but is only used when a marker file
+exists. Create the marker:
+
+```sh
+ssh root@10.11.99.1 'touch /home/root/xovi/exthome/appload/libby/tls-compat.on'
+```
+
+**Plain rmweb install** (`/home/root/rmweb`):
 
 ```sh
 scp device/openssl-rmweb.cnf root@10.11.99.1:/home/root/rmweb/openssl-rmweb.cnf
 ssh root@10.11.99.1 'echo "export OPENSSL_CONF=/home/root/rmweb/openssl-rmweb.cnf" >> /home/root/rmweb/rmweb-env.sh'
 ```
 
-Restart rmweb afterwards. `rmweb-env.sh` is replaced when you install a new upstream release, so
-the second command has to be repeated after an upgrade.
+Restart rmweb afterwards. In the plain install `rmweb-env.sh` is replaced by a new upstream
+release, so that line has to be repeated after an upgrade; the packaged app's marker survives
+updates.
 
 ### Verify
 
@@ -64,7 +75,7 @@ On the tablet, without and then with the config:
 
 ```sh
 echo | openssl s_client -connect sentry.libbyapp.com:443 -servername sentry.libbyapp.com 2>&1 | grep -E "Cipher is|alert"
-echo | OPENSSL_CONF=/home/root/rmweb/openssl-rmweb.cnf openssl s_client -connect sentry.libbyapp.com:443 -servername sentry.libbyapp.com 2>&1 | grep -E "Cipher is|Verification"
+echo | OPENSSL_CONF=/home/root/xovi/exthome/appload/libby/openssl-rmweb.cnf openssl s_client -connect sentry.libbyapp.com:443 -servername sentry.libbyapp.com 2>&1 | grep -E "Cipher is|Verification"
 ```
 
 The first prints a handshake-failure alert; the second prints the negotiated cipher and
@@ -76,7 +87,8 @@ tr '\0' '\n' < /proc/$(pgrep WPENetworkProc | sed -n 1p)/environ | grep OPENSSL_
 
 ### Undo
 
-Delete the `export OPENSSL_CONF=...` line from `/home/root/rmweb/rmweb-env.sh` and restart rmweb.
+Packaged app: delete `tls-compat.on`. Plain install: delete the `export OPENSSL_CONF=...` line
+from `/home/root/rmweb/rmweb-env.sh`. Restart rmweb either way.
 
 ## If a host still fails
 

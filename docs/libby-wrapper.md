@@ -31,32 +31,52 @@ headers are generated from the matching WebKit source tarball.
 ./scripts/fetch-sdk.sh
 docker build -f toolchain/Dockerfile -t rmweb-sdk .
 # rmweb-0.9.7.tar.gz: github.com/exp78/rmweb releases; wpewebkit-2.48.5.tar.xz: wpewebkit.org/releases
-./scripts/stage-from-release.sh /path/to/rmweb-0.9.7.tar.gz /path/to/wpewebkit-2.48.5.tar.xz
+./scripts/stage-from-release.sh build/src/rmweb-0.9.7.tar.gz build/src/wpewebkit-2.48.5.tar.xz
 ./scripts/build-wpeqt.sh          # about a minute; output build/rmweb-wpeqt
+./scripts/package-libby.sh        # dist/libby/ and dist/libby-<version>.tar.gz
 ./scripts/deploy-libby.sh         # rmweb must not be running on the tablet
 ```
 
 On this Mac Docker Desktop's CLI is at `~/.docker/bin` and may need adding to `PATH`.
 
+## The packaged app
+
+`scripts/package-libby.sh` produces one self-contained AppLoad app folder, `libby/`: the whole
+rmweb bundle from the upstream release, this fork's `rmweb-wpeqt`, the launcher, the icon and
+manifest, the opt-in TLS config, and upstream's `LICENSE`/`NOTICE`. It installs as
+`/home/root/xovi/exthome/appload/libby` and does not need a separate rmweb install. The version
+is in `LIBBY_VERSION`.
+
+Install without this repo: unpack the release tarball into AppLoad's folder on the tablet.
+
+```sh
+ssh root@10.11.99.1 'tar -C /home/root/xovi/exthome/appload -xzf -' < libby-0.1.0.tar.gz
+```
+
+Then restart xochitl through XOVI (or reboot and re-enable XOVI) so AppLoad sees the new icon.
+
 ## Tablet-side setup that is not in this repo
 
-1. Install the upstream release (`docs/install.md`), then run `scripts/deploy-libby.sh`.
+1. XOVI and AppLoad must already be installed (for example with reManager/Vellum).
 2. **TLS.** Libby's API hosts cannot complete a handshake under the device's system TLS policy.
-   rmweb needs the opt-in per-app config in `device/openssl-rmweb.cnf`; what it changes, how to
-   install, verify and undo it are in [tls.md](tls.md). No script installs it.
+   The app ships the per-app config but leaves it off; what it changes and how to turn it on,
+   verify and undo it are in [tls.md](tls.md). No script turns it on.
 3. Sign in to Libby once (a setup code from another device works).
-4. Reading settings: `bwFast=1` in `/home/root/.rmweb/settings.txt` (or the toolbar's B&W button);
-   the Libby entry sets `RMWEB_FULL_EVERY=6` (cleaning flash every 6 presents).
+4. Reading settings: the toolbar's B&W button (`bwFast=1` in `/home/root/.rmweb/settings.txt`);
+   the launcher sets `RMWEB_FULL_EVERY=6` (cleaning flash every 6 presents).
+
+The profile (`/home/root/.rmweb`) and WebKit's site data (`/home/root/.local/share/wpe`) are
+shared with a plain rmweb install if one exists, so a Libby sign-in carries over.
 
 ## Using it
 
 - Launch from the **Libby** icon in AppLoad. Over SSH:
-  `systemd-run --unit=rmweb-test --collect --setenv=RMWEB_LIBBY=1 --setenv=RMWEB_FULL_EVERY=6 /home/root/rmweb/rmweb https://libbyapp.com/shelf`
+  `systemd-run --unit=rmweb-test --collect /home/root/xovi/exthome/appload/libby/libby-entry.sh`
 - In a book: tap the middle to toggle Libby's controls; swipe or tap an edge to turn pages (only
   with Libby's overlay dismissed); long-press for the toolbar.
 - Quit with the X. Quitting restarts xochitl, which asks for the passcode, and drops the book
   from memory.
-- Rollback: `/home/root/rmweb/bin/rmweb-wpeqt.orig` is the released binary.
+- Logs: `rmweb.log` in the app folder.
 
 ## Diagnostics
 

@@ -1,8 +1,11 @@
 {
   "name": "Libby",
-  "application": "/home/root/rmweb/libby-entry.sh",
-  "workingDirectory": "/home/root/rmweb",
+  "application": "/home/root/xovi/exthome/appload/libby/libby-entry.sh",
+  "workingDirectory": "/home/root/xovi/exthome/appload/libby",
   "qtfb": false,
   "aspectRatio": "original",
-  "disablesWindowedMode": true
+  "disablesWindowedMode": true,
+  "id": "libby",
+  "version": "0.1.0",
+  "description": "Read Libby library loans in Libby's own web reader (rmweb fork)."
 }
