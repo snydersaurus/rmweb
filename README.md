@@ -44,16 +44,42 @@ XOVI/AppLoad for the launcher icon, and a library card.
 Whether a modified client is acceptable under OverDrive's terms is for each user to judge; the
 clauses that come closest concern scraping, extraction and server load.
 
-## Getting started
+## Install
 
-1. Have XOVI and AppLoad on the tablet (reManager/Vellum is the easy way).
-2. Get the app onto the tablet. From a [release](https://github.com/snydersaurus/rmweb/releases):
-   install the `.apk` with Vellum ([packaging/vellum/README.md](packaging/vellum/README.md)), or
-   unpack the tarball into AppLoad's folder. Or build and package it yourself. The last two are in
-   [docs/libby-wrapper.md](docs/libby-wrapper.md). It is one self-contained AppLoad folder; a
-   separate rmweb install is not needed.
-3. Open Libby. The app will tell you about one TLS option it needs and offer to turn it on;
-   [docs/tls.md](docs/tls.md) has the details. Libby will not connect without it.
+You need developer mode on the tablet and the
+[reManager](https://github.com/rmitchellscott/reManager) desktop app.
+
+1. Download `libby-reader-<version>-r0.apk` from the
+   [latest release](https://github.com/snydersaurus/rmweb/releases/latest).
+2. Open reManager and connect to the tablet.
+3. **Utilities** tab, **File Browser**: go to `/home/root` and drag the `.apk` in (or use
+   **Upload File**).
+4. **Utilities** tab, **Terminal**: install it (use the file name you downloaded).
+
+   ```sh
+   /home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.2.0-r0.apk
+   ```
+
+5. In the same terminal, delete the uploaded file and restart the reMarkable interface so AppLoad
+   notices the new app:
+
+   ```sh
+   rm /home/root/libby-reader-0.2.0-r0.apk
+   /home/root/xovi/start
+   ```
+
+6. On the tablet, open AppLoad and tap **Libby**.
+
+It is not in Vellum's official index, so it will not appear in reManager's list of available
+packages; once installed it shows under Mods as `libby-reader`.
+
+**First launch.** The app shows a page about one TLS option Libby needs and turns it on only if
+you tap the button ([docs/tls.md](docs/tls.md) explains what it changes). Then Libby asks for your
+library card, or a setup code from the Libby app on your phone.
+
+Other ways to install, signature checking and removal:
+[packaging/vellum/README.md](packaging/vellum/README.md). Building it yourself:
+[docs/libby-wrapper.md](docs/libby-wrapper.md).
 
 ## Status
 

@@ -5,8 +5,9 @@
 recipe for the Libby app: it downloads the release tarball from this repo and unpacks it into
 AppLoad's folder, the same way Vellum's KOReader package does.
 
-**This package is not in Vellum's official index**, so it does not appear in reManager's package
-list. It is installed from a file.
+**This package is not in Vellum's official index**, so it does not appear in reManager's list of
+available packages. It is installed from a file; once installed, reManager shows it under Mods as
+`libby-reader`.
 
 ## Install the prebuilt package
 
