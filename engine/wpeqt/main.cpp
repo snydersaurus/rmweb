@@ -100,6 +100,18 @@ static bool touchGuarded()  { return g_get_monotonic_time() < g_touchGuardUntilU
 // True while the on-screen URL keyboard is open — TouchReader must NOT drop taps (refresh guard /
 // 250 ms debounce would eat fast typing). Set only from the GUI thread; read from the touch thread.
 static std::atomic<bool> g_urlEditing{false};
+// Libby mode (RMWEB_LIBBY=1, set by the "Libby" launcher entry): the chrome bar becomes a small
+// reading toolbar (Shelf | B&W/Colour | Font | Refresh | Power) instead of the browser bar.
+static bool g_libbyMode = false;
+// Typefaces the Libby toolbar's Font button cycles through for book text ("" = the book's own).
+static const char *const kBookFonts[] = { "", "Libre Baskerville", "EB Garamond", "Noto Serif", "Noto Sans" };
+static const int kBookFontCount = int(sizeof kBookFonts / sizeof kBookFonts[0]);
+// Top inset for Libby mode (two %f = bar height in CSS px). The transform makes <html> the containing
+// block of position:fixed descendants, so they shift down with it instead of staying under the bar.
+static const char *kLibbyInsetCss =
+    "html{transform:translateY(%.2fpx)!important;height:calc(100%% - %.2fpx)!important;overflow:hidden!important}";
+// Last finger contact (monotonic us) — the sleep watcher's idle timer reads it.
+static std::atomic<gint64> g_lastActivityUs{0};
 
 // Print a native backtrace on a fatal signal (straight to fd 2 -> the persistent device log), then
 // re-raise so the watchdog still sees the crash. Our binary is unstripped, so addr2line on
@@ -307,6 +319,7 @@ Q_SIGNALS:
     void settleFlashChanged(bool on);              // settings-page settle-flash toggle -> view panel path
     void linkMissed();                             // a content tap hit no link -> GUI falls back to chrome toggle
     void bookmarkedChanged(bool on);               // current page bookmark state changed
+    void dbgGrab();                                // RMWEB_DEBUG_JSFILE "#grab": save the composited window
     void notice(const QString &text);              // transient toast in the chrome (find results, downloads)
     void ghostClearRequested();                    // settings-page "Clear ghosting now" -> view does a full develop
     void fieldFocused(const QString &value, bool masked, const QString &suggest); // a text field was tapped -> open the keyboard (suggest = autofill prefill for an empty field, may be empty)
@@ -364,6 +377,52 @@ public Q_SLOTS:
             webkit_user_content_manager_add_style_sheet(m_ucm, ss);
             webkit_user_style_sheet_unref(ss);
             m_siteCssOn = true;
+        }
+        // Optional user stylesheet: <profile>/user.css, injected into every frame at user level
+        // (e.g. a font override for a web reader's book text). Read once at startup.
+        {
+            gchar *css = nullptr;
+            const std::string path = m_profileDir + "/user.css";
+            if (g_file_get_contents(path.c_str(), &css, nullptr, nullptr) && css && *css) {
+                WebKitUserStyleSheet *ss = webkit_user_style_sheet_new(
+                    css, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_STYLE_LEVEL_USER, nullptr, nullptr);
+                webkit_user_content_manager_add_style_sheet(m_ucm, ss);
+                webkit_user_style_sheet_unref(ss);
+                qInfo("[usercss] loaded %s", path.c_str());
+            }
+            g_free(css);
+        }
+        // Optional user script: <profile>/user.js, injected into every frame at document end. Scripts
+        // can report back with window.webkit.messageHandlers.rmweb.postMessage("...") -> "[msg] ..." in
+        // the log. Read once at startup.
+        {
+            gchar *src = nullptr;
+            const std::string path = m_profileDir + "/user.js";
+            if (g_file_get_contents(path.c_str(), &src, nullptr, nullptr) && src && *src) {
+                WebKitUserScript *us = webkit_user_script_new(
+                    src, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_END, nullptr, nullptr);
+                webkit_user_content_manager_add_script(m_ucm, us);
+                webkit_user_script_unref(us);
+                g_signal_connect(m_ucm, "script-message-received::rmweb",
+                    G_CALLBACK(+[](WebKitUserContentManager *, JSCValue *v, gpointer) {
+                        char *c = jsc_value_to_string(v);
+                        qInfo("[msg] %s", c ? c : "");
+                        g_free(c);
+                    }), nullptr);
+                webkit_user_content_manager_register_script_message_handler(m_ucm, "rmweb", nullptr);
+                qInfo("[userjs] loaded %s", path.c_str());
+            }
+            g_free(src);
+        }
+        // Book typeface chosen with the Libby toolbar's Font button (<profile>/bookfont.txt).
+        {
+            gchar *fam = nullptr;
+            if (g_file_get_contents((m_profileDir + "/bookfont.txt").c_str(), &fam, nullptr, nullptr) && fam) {
+                g_strstrip(fam);
+                for (int i = 1; i < kBookFontCount; ++i) if (strcmp(fam, kBookFonts[i]) == 0) m_bookFont = i;
+            }
+            g_free(fam);
+            applyBookFont();
         }
         m_view = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW,
             "display", display, "user-content-manager", m_ucm, nullptr));
@@ -712,6 +771,7 @@ public Q_SLOTS:
         }
         // Apply persisted zoom (must be done after the view is fully set up).
         webkit_web_view_set_zoom_level(m_view, m_zoom);
+        applyTopInset();
 
         // Persistent cookies (default on): logins/sessions survive relaunch. Stored in the profile
         // dir as sqlite; RMWEB_COOKIES=0 opts out (session-only). Must be set before the first load.
@@ -867,6 +927,8 @@ public Q_SLOTS:
             // Safe: the UCM holds ONLY kSiteCss — reader mode styles the DOM it builds, not the UCM.
             webkit_user_content_manager_remove_all_style_sheets(m_ucm);
             m_siteCssOn = false;
+            if (m_fontSheet) webkit_user_content_manager_add_style_sheet(m_ucm, m_fontSheet);   // keep the book font
+            if (m_insetSheet) webkit_user_content_manager_add_style_sheet(m_ucm, m_insetSheet);  // and the top inset
             qInfo("[sitecss] off (settings)");
         }
     }
@@ -941,6 +1003,7 @@ public Q_SLOTS:
         marshalToCtx([this, x, y, peek] {
             if (!m_view) return;
             m_lastProbePeek = peek;
+            if (!peek) { m_lastTapX = x; m_lastTapY = y; }
             // A link tap navigates via synthetic JS (location.href=... in the probe below) — WebKit
             // classifies that NAVIGATION_TYPE_OTHER, indistinguishable from a site auto-refresh, so
             // the auto-refresh guard would eat a tap on a same-URL link. Exempt the next navigation;
@@ -1052,7 +1115,19 @@ public Q_SLOTS:
                 "Object.getOwnPropertyDescriptor(p,'value').set.call(f,txt);"
                 "f.dispatchEvent(new Event('input',{bubbles:true}));}}"
                 "f.dispatchEvent(new Event('change',{bubbles:true}));"
-                "try{f.blur();}catch(e){}"   // Go = done editing; also hides the caret
+                // Search-style fields act on the Enter KEY, not on a value change (Libby's catalogue
+                // search shows nothing until Enter). Detect one — type/role/enterkeyhint says search,
+                // or it is the only visible text input of its form/page — keep it focused and answer
+                // "...\nenter" so onFieldSet follows up with a real Return key press.
+                "var ent=false;if(ty!=='password'&&f.tagName==='INPUT'){"
+                "var ro=(f.getAttribute('role')||'').toLowerCase(),hi=(f.getAttribute('enterkeyhint')||'').toLowerCase();"
+                "ent=ty==='search'||ro==='searchbox'||ro==='combobox'||hi==='search'||hi==='go';"
+                "if(!ent){var rt=f.form||document,n=0,al=rt.querySelectorAll('input,textarea');"
+                "for(var k=0;k<al.length;k++){var e2=al[k],t3=(e2.type||'').toLowerCase();"
+                "if(e2.tagName==='TEXTAREA'||t3===''||t3==='text'||t3==='search'||t3==='email'||t3==='tel'"
+                "||t3==='password'||t3==='number'||t3==='url'){var bb=e2.getBoundingClientRect();"
+                "if(bb.width>0&&bb.height>0)n++;}}ent=(n===1);}}"
+                "if(!ent){try{f.blur();}catch(e){}}"   // Go = done editing; also hides the caret
                 // A bare value set may commit no buffer on this backend (same as scrollBy) — bump the
                 // hidden marker node to dirty the page and force exactly one composite.
                 "var m=document.getElementById('__r');if(!m){m=document.createElement('span');m.id='__r';"
@@ -1065,7 +1140,7 @@ public Q_SLOTS:
                 "if(t2===''||t2==='text'||t2==='email'||t2==='tel'){"
                 "u=(ins[i].value||'').replace(/\\s+/g,' ').slice(0,80);if(u)break;}}}catch(e){}"
                 "return 'pw\\n'+u;}"
-                "return ok?'ok':'fallback';})(\"%s\")", t.c_str());
+                "return (ok?'ok':'fallback')+(ent?'\\nenter':'');})(\"%s\")", t.c_str());
             webkit_web_view_evaluate_javascript(m_view, js, -1, nullptr, nullptr, m_cancel, &WpeEngine::onFieldSet, this);
             g_free(js);
         });
@@ -1079,6 +1154,9 @@ public Q_SLOTS:
         qInfo("[form] setFieldText -> %s", !out.empty() ? out.c_str() : (v ? "(non-string)" : "(eval error)"));
         if (v) g_object_unref(v);
         if (!self) return;
+        // A search-style field asked for Enter: the field is still focused, so a real key lands in it.
+        if (out.size() > 6 && out.compare(out.size() - 6, 6, "\nenter") == 0 && self->m_view)
+            self->sendKey(WPE_KEY_Return, KEY_ENTER);
         // A password commit answered "pw\n<sibling-login>" — remember host -> (login, obfuscated
         // password). m_lastCommitText holds the plaintext of this commit (cleared right after).
         if (out.rfind("pw\n", 0) == 0 && !self->m_lastCommitText.empty()) {
@@ -1120,6 +1198,225 @@ public Q_SLOTS:
     }
     void pageNext()  { pageBy(+1); }   // façade page-turn (wraps the scroll+repaint in pageBy;
     void pagePrev()  { pageBy(-1); }   // only dy's sign matters — the JS picks the actual step)
+    bool keyPaging() const { return m_keyPaging.load(std::memory_order_acquire); }
+    // Libby mode: while the toolbar is showing, push the page down by the bar's height so it does not
+    // cover the site's own top-row controls. Done with a top-frame user stylesheet (the page's root
+    // becomes a shorter box that also contains its fixed-position children) rather than by resizing
+    // the WPE view — every frame in this pipeline is assumed panel-sized. Not applied inside a book:
+    // there the bar is a brief long-press overlay, and resizing the reader would re-paginate it.
+    void setChromeShown(bool on) { marshalToCtx([this, on] { m_chromeShown = on; applyTopInset(); }); }
+    void applyTopInset() {   // worker thread
+        static const bool enabled = g_libbyMode && qgetenv("RMWEB_LIBBY_INSET") != "0";
+        const bool want = enabled && m_chromeShown && m_view && !keyPagingUrl(webkit_web_view_get_uri(m_view));
+        if (m_insetSheet && (!want || m_insetZoom != m_zoom)) {
+            webkit_user_content_manager_remove_style_sheet(m_ucm, m_insetSheet);
+            webkit_user_style_sheet_unref(m_insetSheet);
+            m_insetSheet = nullptr;
+        }
+        if (!want || m_insetSheet) return;
+        const double barPanelPx = int(104 * std::clamp(kPanelW / 1620.0, 0.60, 1.0));   // == WpeView::kBarH()
+        const double px = barPanelPx / std::max(0.5, m_dpr * m_zoom);                    // panel px -> CSS px
+        gchar *css = g_strdup_printf(kLibbyInsetCss, px, px);
+        m_insetSheet = webkit_user_style_sheet_new(css, WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
+                                                   WEBKIT_USER_STYLE_LEVEL_USER, nullptr, nullptr);
+        g_free(css);
+        webkit_user_content_manager_add_style_sheet(m_ucm, m_insetSheet);
+        m_insetZoom = m_zoom;
+    }
+    // Libby toolbar actions (GUI thread -> worker).
+    void toggleBwFast() { marshalToCtx([this] { toggleBwFastSetting(); }); }
+    void cycleBookFont() {
+        marshalToCtx([this] {
+            m_bookFont = (m_bookFont + 1) % kBookFontCount;
+            applyBookFont();
+            rmweb::detail::atomicWrite(m_profileDir + "/bookfont.txt", std::string(kBookFonts[m_bookFont]) + "\n");
+            qInfo("[font] book font: %s", m_bookFont ? kBookFonts[m_bookFont] : "(publisher)");
+            Q_EMIT notice(m_bookFont ? QStringLiteral("Font: %1").arg(QString::fromUtf8(kBookFonts[m_bookFont]))
+                                     : QStringLiteral("Font: publisher's own"));
+        });
+    }
+    // (Re)install the book-typeface user stylesheet. Libby renders book text in frames whose <html>
+    // carries the RS-BIFOCAL class, so the rule leaves Libby's own UI and other sites alone.
+    void applyBookFont() {
+        if (m_fontSheet) {
+            webkit_user_content_manager_remove_style_sheet(m_ucm, m_fontSheet);
+            webkit_user_style_sheet_unref(m_fontSheet);
+            m_fontSheet = nullptr;
+        }
+        if (m_bookFont <= 0) return;
+        const std::string css = std::string("html.RS-BIFOCAL body,html.RS-BIFOCAL body *{font-family:\"")
+                              + kBookFonts[m_bookFont] + "\",serif!important}";
+        m_fontSheet = webkit_user_style_sheet_new(css.c_str(), WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+                                                  WEBKIT_USER_STYLE_LEVEL_USER, nullptr, nullptr);
+        webkit_user_content_manager_add_style_sheet(m_ucm, m_fontSheet);
+    }
+    // Loan guard for a Libby book kept open across sleeps: the web reader holds the whole book in
+    // memory, so an untouched session could outlive the loan. Libby's own loan list (localStorage,
+    // synced by its app) carries each loan's expiry; once the open title's has passed, leave the
+    // reader for the shelf, which drops the book. Called on a timer and on wake.
+    void checkLoanExpiry() {
+        marshalToCtx([this] {
+            if (!m_view || !keyPagingUrl(webkit_web_view_get_uri(m_view))) return;
+            static const char *js =
+                "(function(){try{var id=location.pathname.split('/').filter(Boolean).pop();"
+                "var a=JSON.parse(localStorage.getItem('dewey:patron:loan:all')||'{}');"
+                "var l=(a.all||[]).filter(function(x){return String(x.titleId)===id;})[0];"
+                "return l&&l.expireTime?String(l.expireTime):'none';}catch(e){return 'none';}})()";
+            webkit_web_view_evaluate_javascript(m_view, js, -1, nullptr, nullptr, m_cancel,
+                [](GObject *obj, GAsyncResult *res, gpointer data) {
+                    bool cancelled; JSCValue *v = finishJsEval(obj, res, &cancelled);
+                    if (cancelled) return;
+                    auto *self = static_cast<WpeEngine*>(data);
+                    std::string out;
+                    if (v && jsc_value_is_string(v)) { char *c = jsc_value_to_string(v); out = c ? c : ""; g_free(c); }
+                    if (v) g_object_unref(v);
+                    const gint64 expMs = g_ascii_strtoll(out.c_str(), nullptr, 10);
+                    const gint64 nowMs = g_get_real_time() / 1000;
+                    if (expMs <= 0) { qInfo("[loan] no expiry found for the open title"); return; }
+                    qInfo("[loan] expires in %.1f h", (expMs - nowMs) / 3.6e6);
+                    if (nowMs < expMs || !self->m_view) return;
+                    qInfo("[loan] expired — leaving the reader");
+                    Q_EMIT self->notice(QStringLiteral("This loan has ended"));
+                    self->m_expectUserNav = true;
+                    webkit_web_view_load_uri(self->m_view, "https://libbyapp.com/shelf");
+                }, this);
+        });
+    }
+    // Replay the last content tap as a REAL pointer click (view coords = panel px / dpr). A paginated
+    // reader lives in a cross-origin frame the JS tap probe can't see into; a trusted click is how
+    // its own UI (show/hide controls, seek bar, contents) is reached.
+    void clickLastTap() {
+        marshalToCtx([this] { if (m_view) sendClick(m_lastTapX / m_dpr, m_lastTapY / m_dpr); });
+    }
+    // Sideways swipe (+1 = finger moved left = next page). Only paginated web readers act on it;
+    // on ordinary pages a horizontal swipe stays a no-op, as before.
+    void hSwipe(int dir) {
+        marshalToCtx([this, dir] {
+            if (m_view && keyPagingUrl(webkit_web_view_get_uri(m_view))) sendPageKey(dir);
+        });
+    }
+    // Pages that paginate themselves and never scroll the document (Libby's book reader): the
+    // scroll-based page turn can't move them, but they listen for arrow keys.
+    static bool libbyUrl(const char *uri) {
+        if (!uri) return false;
+        const std::string host = rmweb::hostFromUrl(uri);
+        const std::string tail = ".libbyapp.com";
+        return host == "libbyapp.com"
+            || (host.size() > tail.size() && host.compare(host.size() - tail.size(), tail.size(), tail) == 0);
+    }
+    static bool keyPagingUrl(const char *uri) {
+        return libbyUrl(uri) && std::string(uri).find("/open/") != std::string::npos;
+    }
+    // Deliver a REAL Right/Left arrow key press to the page through WPE's input path (worker thread).
+    // Everything else in this shell drives the page with synthetic JS; a trusted key event is what a
+    // web reader's own keyboard handler expects.
+    void sendPageKey(int dir) {
+        sendKey(dir > 0 ? WPE_KEY_Right : WPE_KEY_Left, dir > 0 ? KEY_RIGHT : KEY_LEFT);
+        qInfo("[page] key %s", dir > 0 ? "Right" : "Left");
+    }
+    void sendKey(guint keyval, guint evdevCode) {
+        WPEView *v = webkit_web_view_get_wpe_view(m_view);
+        if (!v) return;
+        if (!wpe_view_get_has_focus(v)) wpe_view_focus_in(v);   // key events go to the focused view
+        const guint keycode = evdevCode + 8;                    // evdev code + 8 = XKB keycode
+        const guint32 t = static_cast<guint32>(g_get_monotonic_time() / 1000);
+        for (WPEEventType type : { WPE_EVENT_KEYBOARD_KEY_DOWN, WPE_EVENT_KEYBOARD_KEY_UP }) {
+            WPEEvent *ev = wpe_event_keyboard_new(type, v, WPE_INPUT_SOURCE_KEYBOARD, t,
+                                                  static_cast<WPEModifiers>(0), keycode, keyval);
+            if (!ev) continue;
+            wpe_view_event(v, ev);
+            wpe_event_unref(ev);
+        }
+    }
+    // Real pointer click / touch swipe at CSS-px view coordinates (worker thread). Diagnostic
+    // building blocks for pages that only react to trusted input.
+    void sendClick(double x, double y) {
+        WPEView *v = webkit_web_view_get_wpe_view(m_view);
+        if (!v) return;
+        const guint32 t = static_cast<guint32>(g_get_monotonic_time() / 1000);
+        WPEEvent *mv = wpe_event_pointer_move_new(WPE_EVENT_POINTER_MOVE, v, WPE_INPUT_SOURCE_MOUSE, t,
+                                                  static_cast<WPEModifiers>(0), x, y, 0, 0);
+        if (mv) { wpe_view_event(v, mv); wpe_event_unref(mv); }
+        // modifiers carry the button state AFTER the event: held on DOWN, released on UP. Getting
+        // this backwards leaves the page thinking the button is still down (no pointerup, and the
+        // next press arrives without a pointerdown).
+        WPEEvent *dn = wpe_event_pointer_button_new(WPE_EVENT_POINTER_DOWN, v, WPE_INPUT_SOURCE_MOUSE, t,
+                                                    WPE_MODIFIER_POINTER_BUTTON1, 1, x, y, 1);
+        if (dn) { wpe_view_event(v, dn); wpe_event_unref(dn); }
+        // press_count must be 0 on anything but DOWN (WPE asserts and returns NULL otherwise).
+        WPEEvent *up = wpe_event_pointer_button_new(WPE_EVENT_POINTER_UP, v, WPE_INPUT_SOURCE_MOUSE, t + 60,
+                                                    static_cast<WPEModifiers>(0), 1, x, y, 0);
+        if (up) { wpe_view_event(v, up); wpe_event_unref(up); }
+        qInfo("[dbg] click %.0f,%.0f", x, y);
+    }
+    // Real wheel scroll at view coords (x,y): WebKit scrolls whatever scroller is under the pointer —
+    // the document or an inner overflow container — through its own scrolling path.
+    void sendWheel(double x, double y, double dy, int mode = 0) {   // mode: 0 precise, 1 notches, 2 precise+stop
+        WPEView *v = webkit_web_view_get_wpe_view(m_view);
+        if (!v) return;
+        const guint32 t = static_cast<guint32>(g_get_monotonic_time() / 1000);
+        WPEEvent *mv = wpe_event_pointer_move_new(WPE_EVENT_POINTER_MOVE, v, WPE_INPUT_SOURCE_MOUSE, t,
+                                                  static_cast<WPEModifiers>(0), x, y, 0, 0);
+        if (mv) { wpe_view_event(v, mv); wpe_event_unref(mv); }
+        WPEEvent *sc = wpe_event_scroll_new(v, WPE_INPUT_SOURCE_MOUSE, t + 1, static_cast<WPEModifiers>(0),
+                                            0, dy, mode != 1, FALSE, x, y);
+        if (sc) { wpe_view_event(v, sc); wpe_event_unref(sc); }
+        if (mode != 2) return;
+        WPEEvent *st = wpe_event_scroll_new(v, WPE_INPUT_SOURCE_MOUSE, t + 2, static_cast<WPEModifiers>(0),
+                                            0, 0, TRUE, TRUE, x, y);
+        if (st) { wpe_view_event(v, st); wpe_event_unref(st); }
+    }
+    void sendTouchSwipe(double x1, double y1, double x2, double y2) {
+        WPEView *v = webkit_web_view_get_wpe_view(m_view);
+        if (!v) return;
+        const guint32 t = static_cast<guint32>(g_get_monotonic_time() / 1000);
+        const int steps = 6;
+        for (int i = 0; i <= steps + 1; ++i) {
+            const WPEEventType type = i == 0 ? WPE_EVENT_TOUCH_DOWN : i > steps ? WPE_EVENT_TOUCH_UP : WPE_EVENT_TOUCH_MOVE;
+            const double f = std::min(1.0, double(i) / steps);
+            WPEEvent *ev = wpe_event_touch_new(type, v, WPE_INPUT_SOURCE_TOUCHSCREEN, t + i * 16,
+                                               static_cast<WPEModifiers>(0), 1, x1 + (x2 - x1) * f, y1 + (y2 - y1) * f);
+            if (ev) { wpe_view_event(v, ev); wpe_event_unref(ev); }
+        }
+        qInfo("[dbg] touch swipe %.0f,%.0f -> %.0f,%.0f", x1, y1, x2, y2);
+    }
+    // DIAG (RMWEB_DEBUG_JSFILE=/path): poll a script file and run it whenever its content changes —
+    // a poor man's remote inspector. Lines starting with '#' are input directives
+    // ("#key R|L", "#click x y", "#swipe x1 y1 x2 y2", CSS px); the rest is evaluated as JS in the
+    // top frame and its string result logged as "[js] ...".
+    void debugRunFile(const std::string &path) {
+        marshalToCtx([this, path] {
+            if (!m_view) return;
+            gchar *raw = nullptr;
+            if (!g_file_get_contents(path.c_str(), &raw, nullptr, nullptr) || !raw) return;
+            std::string body(raw); g_free(raw);
+            if (body == m_dbgLast) return;
+            m_dbgLast = body;
+            std::string js; size_t pos = 0;
+            while (pos < body.size()) {
+                size_t nl = body.find('\n', pos); if (nl == std::string::npos) nl = body.size();
+                const std::string line = body.substr(pos, nl - pos); pos = nl + 1;
+                double a = 0, b = 0, c = 0, d = 0; char k = 0;
+                if (sscanf(line.c_str(), "#key %c", &k) == 1) sendPageKey(k == 'R' ? +1 : -1);
+                else if (sscanf(line.c_str(), "#click %lf %lf", &a, &b) == 2) sendClick(a, b);
+                else if (line.rfind("#reload", 0) == 0) { m_expectUserNav = true; webkit_web_view_reload(m_view); }
+                else if (line.rfind("#grab", 0) == 0) Q_EMIT dbgGrab();
+                else if (sscanf(line.c_str(), "#wheel %lf %lf %lf %lf", &a, &b, &c, &d) >= 3) { sendWheel(a, b, c, int(d)); qInfo("[dbg] wheel %.0f,%.0f dy=%.0f mode=%d", a, b, c, int(d)); }
+                else if (sscanf(line.c_str(), "#swipe %lf %lf %lf %lf", &a, &b, &c, &d) == 4) sendTouchSwipe(a, b, c, d);
+                else if (line.empty() || line[0] != '#') { js += line; js += '\n'; }
+            }
+            if (js.find_first_not_of(" \t\r\n") == std::string::npos) return;
+            webkit_web_view_evaluate_javascript(m_view, js.c_str(), -1, nullptr, nullptr, m_cancel,
+                [](GObject *obj, GAsyncResult *res, gpointer) {
+                    GError *err = nullptr;
+                    JSCValue *v = webkit_web_view_evaluate_javascript_finish(WEBKIT_WEB_VIEW(obj), res, &err);
+                    if (!v) { qInfo("[js] error: %s", err ? err->message : "?"); g_clear_error(&err); return; }
+                    char *c = jsc_value_to_string(v);
+                    qInfo("[js] %s", c ? c : "");
+                    g_free(c); g_object_unref(v);
+                }, nullptr);
+        });
+    }
     // Text size -/+ (the A-/A+ chrome buttons): page zoom in normal mode, reader font in reader mode.
     void zoomBy(int dir) {
         marshalToCtx([this, dir] {
@@ -1138,6 +1435,7 @@ public Q_SLOTS:
                 const double before = m_zoom;
                 m_zoom = std::clamp(m_zoom * (dir > 0 ? 1.2 : 1.0 / 1.2), 0.5, 3.0);     // page zoom level
                 webkit_web_view_set_zoom_level(m_view, m_zoom);
+                applyTopInset();   // the inset is in CSS px — follow the zoom
                 Q_EMIT notice(m_zoom == before
                     ? (dir > 0 ? QStringLiteral("Zoom max") : QStringLiteral("Zoom min"))   // at the clamp — say so
                     : QStringLiteral("Zoom %1%").arg(int(m_zoom * 100 + 0.5)));
@@ -1175,6 +1473,22 @@ private:
     static gboolean onPage(gpointer d) {
         auto *m = static_cast<PageMsg*>(d);
         WpeEngine *self = m->self;
+        // Paginated web readers turn their own pages — hand them an arrow key instead of scrolling.
+        if (self->m_view && keyPagingUrl(webkit_web_view_get_uri(self->m_view))) {
+            self->sendPageKey(m->dy > 0 ? +1 : -1);
+            return G_SOURCE_REMOVE;
+        }
+        // The rest of Libby (shelf, search results, ...) scrolls an inner list that fills itself in as
+        // it moves. The scroll-and-untrap JS below leaves it blank, so hand it a real wheel scroll at
+        // the middle of the view instead. Measured on device: a precise delta of d view px moves the
+        // list 2.5*d/zoom CSS px, so 0.28 of the view height is a bit under one visible list page.
+        if (self->m_view && libbyUrl(webkit_web_view_get_uri(self->m_view))) {
+            if (WPEView *v = webkit_web_view_get_wpe_view(self->m_view)) {
+                const double w = wpe_view_get_width(v), h = wpe_view_get_height(v);
+                self->sendWheel(w / 2, h / 2, (m->dy > 0 ? -1 : 1) * 0.28 * h);
+            }
+            return G_SOURCE_REMOVE;
+        }
         if (self->m_view) {
             self->m_pageUs = g_get_monotonic_time();
             self->m_userScrolled = true;   // suppress a pending scroll-restore for this load
@@ -1539,6 +1853,8 @@ private:
         auto *self = static_cast<WpeEngine*>(data);
         const char *u = webkit_web_view_get_uri(WEBKIT_WEB_VIEW(obj));
         qInfo("[nav] uri=%s", u ? u : "");
+        self->m_keyPaging.store(keyPagingUrl(u), std::memory_order_release);
+        self->applyTopInset();
         // Generated pages loaded with an about:blank base (address-bar search results) must not
         // clobber the address bar — the typed query stays (set when the search was kicked off).
         if (u && std::string(u) == "about:blank") return;
@@ -2154,6 +2470,14 @@ private:
     GSource *m_scrollSaveSrc = nullptr;             // pending debounced scroll-position write
     GSource *m_tabsSaveSrc = nullptr;               // pending debounced tabs write
     std::string m_curUrl, m_curTitle;               // current committed page (for history + bookmark)
+    bool m_chromeShown = true;                      // toolbar visible (mirrors WpeView; worker thread)
+    WebKitUserStyleSheet *m_insetSheet = nullptr;   // Libby-mode top inset sheet (we hold a ref)
+    double m_insetZoom = 0;                         // zoom the inset sheet was computed for
+    int m_bookFont = 0;                             // index into kBookFonts (0 = the book's own typeface)
+    WebKitUserStyleSheet *m_fontSheet = nullptr;    // the installed book-typeface sheet (we hold a ref)
+    std::atomic<bool> m_keyPaging{false};           // current page is a self-paginating reader (GUI reads it)
+    int m_lastTapX = 0, m_lastTapY = 0;             // panel px of the last content tap probe (worker thread)
+    std::string m_dbgLast;                          // RMWEB_DEBUG_JSFILE: last script body run (worker thread)
     int m_curScroll = 0;                            // last recorded scroll offset of m_curUrl (CSS px)
     bool m_userScrolled = false;                    // a page turn happened on this load (suppress restore)
     bool m_lastProbePeek = false;                   // the in-flight tap probe is a long-press peek (no linkMissed)
@@ -2353,7 +2677,14 @@ public:
         if (m_editing) drawKeyboard(p, w, h); // URL keyboard only while editing
     }
     // Hit-test a tap against the chrome bar (panel px); returns the control, or None (off / below the bar).
-    enum Hit { None, Back, Fwd, Reload, Home, Address, AddressClear, ZoomOut, ZoomIn, Bookmark, Reader, Power };
+    enum Hit { None, Back, Fwd, Reload, Home, Address, AddressClear, ZoomOut, ZoomIn, Bookmark, Reader, Power,
+               LShelf, LMode, LFont, LClean };   // L* = the Libby toolbar (g_libbyMode)
+    // Libby toolbar geometry: four equal text buttons, then Power in its usual right-hand slot.
+    static constexpr int kLibbyN = 6;
+    static constexpr Hit kLibbyBtns[kLibbyN] = { LShelf, LMode, LFont, ZoomOut, ZoomIn, LClean };
+    int libbyBtnW() const { return (int(width()) - kPowerW()) / kLibbyN; }
+    static int libbyIndex(Hit h) { for (int i = 0; i < kLibbyN; ++i) if (kLibbyBtns[i] == h) return i; return -1; }
+    bool bwFast() const { return m_bwFast; }
     // Right-cluster geometry (panel px) — ONE source for hit-test, pressed overlay and painting.
     struct ChromeX { int powerX, readerX, starX, zInX, zOutX; };
     ChromeX chromeLayout() const {
@@ -2368,6 +2699,7 @@ public:
     Hit hitChrome(int x, int y) const {
         if (!m_chromeOn || y >= kBarH()) return None;
         const ChromeX c = chromeLayout();
+        if (g_libbyMode) return x >= c.powerX ? Power : kLibbyBtns[qMin(kLibbyN - 1, x / qMax(1, libbyBtnW()))];
         if (x < kBackX())         return Back;
         if (x < kFwdX())          return Fwd;
         if (x < kRelX())          return Reload;
@@ -2417,6 +2749,10 @@ public:
     // Panel-px rect of a chrome control (same layout as hitChrome via chromeLayout), for painting.
     QRectF chromeHitRect(Hit h) const {
         const ChromeX c = chromeLayout();
+        if (g_libbyMode) {
+            const int i = libbyIndex(h);
+            if (i >= 0) return QRectF(i * libbyBtnW(), 0, libbyBtnW(), kBarH());
+        }
         switch (h) {
             case Back:     return QRectF(0, 0, kBackX(), kBarH());
             case Fwd:      return QRectF(kBackX(), 0, kFwdX() - kBackX(), kBarH());
@@ -2442,11 +2778,25 @@ public:
             case Home:     iconHome(p, cx, cy); break;
             case Bookmark: iconStar(p, cx, cy, m_bookmarked); break;
             case Reader:   iconReader(p, cx, cy); break;
-            case Power:    iconPower(p, cx, cy); break;
+            case Power:
+                if (g_libbyMode) {   // a plain close X — one tap quits
+                    QPen xp = p->pen(); xp.setWidthF(qMax(3.0, 5.0 * uiScale())); xp.setCapStyle(Qt::RoundCap); p->setPen(xp);
+                    const qreal d = 13 * uiScale() + 4;
+                    p->drawLine(QPointF(cx - d, cy - d), QPointF(cx + d, cy + d));
+                    p->drawLine(QPointF(cx + d, cy - d), QPointF(cx - d, cy + d));
+                } else iconPower(p, cx, cy);
+                break;
             case ZoomOut:
             case ZoomIn: {
                 QFont zf = p->font(); zf.setPixelSize(qMax(20, int(40 * uiScale()))); zf.setBold(true); p->setFont(zf);
                 p->drawText(r, Qt::AlignCenter, h == ZoomOut ? "A-" : "A+");
+                break;
+            }
+            case LShelf: case LMode: case LFont: case LClean: {
+                QFont lf = p->font(); lf.setPixelSize(qMax(20, int(38 * uiScale()))); lf.setBold(true); p->setFont(lf);
+                p->drawText(r, Qt::AlignCenter, h == LShelf ? QStringLiteral("Shelf")
+                                              : h == LMode  ? (m_bwFast ? QStringLiteral("B&W") : QStringLiteral("Colour"))
+                                              : h == LFont  ? QStringLiteral("Font") : QStringLiteral("Refresh"));
                 break;
             }
             default: break;
@@ -2554,6 +2904,7 @@ public:
         }
     }
 Q_SIGNALS:
+    void chromeShownChanged(bool on);      // bar shown/hidden by a tap (Libby mode insets the page under it)
     void urlEntered(const QString &url);   // Go pressed with a non-empty buffer -> load it (wired in main())
     void fieldTextEntered(const QString &text);   // Go in field mode -> commit into the focused page field
 public Q_SLOTS:
@@ -2629,11 +2980,11 @@ public Q_SLOTS:
     }
     // Chrome state (fed by engine signals on the GUI thread). Each re-presents the current frame with the
     // new chrome via the SAME serializer — never a bare update() (that would risk an overlapping present).
-    void setChromeOn(bool v)       { if (v != m_chromeOn) { m_chromeOn = v; scheduleDirty(barZone()); } }
+    void setChromeOn(bool v)       { if (v != m_chromeOn) { m_chromeOn = v; scheduleDirty(barZone()); Q_EMIT chromeShownChanged(v); } }
     // B&W fast mode (settings page): present grayscale frames — the panel's fast mono waveform develops
     // them fully, while colour content under a fast waveform stays washed out until a slow full pass.
     // And force that fast waveform ourselves per content present (presentFast below).
-    void setBwFast(bool v)         { if (v != m_bwFast) { m_bwFast = v; m_grayDirty = true; markDirtyAll(); schedule(); } }
+    void setBwFast(bool v)         { if (v != m_bwFast) { m_bwFast = v; m_grayDirty = true; markDirtyAll(); schedule(); } }   // full repaint covers the Libby bar's mode label
     // Text boost (colour mode): darken text via a luma tone curve on the frame (paint() below).
     void setTextBoost(bool v)      { if (v != m_textBoost) { m_textBoost = v; m_tonedDirty = true; markDirtyAll(); schedule(); } }
     // Settle flash (settings page): one full-quality develop after the page goes quiet. No repaint
@@ -2813,6 +3164,24 @@ private:
         // Disabled = dark grey #777: lighter greys read as "faded out" on e-ink, #777 still reads
         // as "off" next to black but stays legible (form over tone — we do NOT thin/dash the stroke).
         auto pen = [&](bool on) { p->setPen(on ? Qt::black : QColor(119, 119, 119)); p->setBrush(Qt::NoBrush); };
+        if (g_libbyMode) {   // reading toolbar: text buttons with thin dividers, Power on the right
+            pen(true);
+            for (Hit h : kLibbyBtns) {
+                drawChromeIcon(p, h);
+                const qreal x = chromeHitRect(h).right();
+                p->fillRect(QRectF(x - 1, kBarH() * 0.25, 2, kBarH() * 0.5), Qt::black);
+            }
+            pen(true); drawChromeIcon(p, Power);
+            if (m_pressed != None) {
+                const QRectF r = chromeHitRect(m_pressed).adjusted(6, 6, -6, -6);
+                p->setPen(Qt::NoPen); p->setBrush(Qt::black);
+                p->drawRoundedRect(r, 12, 12);
+                p->setPen(Qt::white); p->setBrush(Qt::NoBrush);
+                drawChromeIcon(p, m_pressed);
+                p->setPen(Qt::black); p->setBrush(Qt::NoBrush);
+            }
+            return;
+        }
         pen(m_canBack); drawChromeIcon(p, Back);
         pen(m_canFwd);  drawChromeIcon(p, Fwd);
         pen(true);      drawChromeIcon(p, Reload);
@@ -3235,6 +3604,77 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Sleep watcher — while rmweb owns the screen xochitl is stopped, and xochitl is what normally
+// handles the power button and idle sleep (logind is configured to ignore the key). Without this
+// the tablet never sleeps inside the browser. A short power-button press, or RMWEB_IDLE_SLEEP_MIN
+// minutes without a touch (default 15, 0 = never), suspends to RAM via `systemctl suspend` so the
+// vendor sleep hooks run (wifi module unload, wake sources). The process stays in memory, so the
+// open page — e.g. a book already loaded by a web reader — is still there on wake, online or not.
+// Runs on a detached std::thread; the process leaves via _Exit, which takes the thread with it.
+// ---------------------------------------------------------------------------
+static gint64 suspendedUs() {   // total time spent suspended: BOOTTIME counts it, MONOTONIC does not
+    struct timespec b, m;
+    clock_gettime(CLOCK_BOOTTIME, &b); clock_gettime(CLOCK_MONOTONIC, &m);
+    return (gint64(b.tv_sec) - m.tv_sec) * 1000000 + (b.tv_nsec - m.tv_nsec) / 1000;
+}
+static void sleepWatcher(std::function<void()> onSleep, std::function<void()> onWake) {
+    blockSigterm(true);   // TERM belongs to the GUI thread
+    int fd = -1;
+    if (DIR *dir = opendir("/dev/input")) {
+        struct dirent *e; char path[320], name[256];
+        while (fd < 0 && (e = readdir(dir))) {
+            if (strncmp(e->d_name, "event", 5) != 0) continue;
+            snprintf(path, sizeof path, "/dev/input/%s", e->d_name);
+            const int f = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+            if (f < 0) continue;
+            name[0] = 0;
+            if (ioctl(f, EVIOCGNAME(sizeof name), name) >= 0 && strstr(name, "pwrkey")) fd = f; else close(f);
+        }
+        closedir(dir);
+    }
+    int idleMin = 15;
+    if (qEnvironmentVariableIsSet("RMWEB_IDLE_SLEEP_MIN")) idleMin = qEnvironmentVariableIntValue("RMWEB_IDLE_SLEEP_MIN");
+    qInfo("[sleep] watcher up: power key %s, idle sleep %d min", fd >= 0 ? "found" : "NOT found", idleMin);
+    if (fd < 0 && idleMin <= 0) return;
+    g_lastActivityUs.store(g_get_monotonic_time(), std::memory_order_release);
+    gint64 ignoreKeyUntil = 0;
+    for (;;) {
+        bool pressed = false;
+        struct pollfd pfd = { fd, POLLIN, 0 };
+        if (fd >= 0 ? poll(&pfd, 1, 1000) > 0 : (g_usleep(1000000), false)) {
+            struct input_event ev;
+            while (read(fd, &ev, sizeof ev) == sizeof ev)
+                if (ev.type == EV_KEY && ev.code == KEY_POWER && ev.value == 0) pressed = true;   // on release
+        }
+        const gint64 now = g_get_monotonic_time();
+        if (pressed && now < ignoreKeyUntil) pressed = false;   // the press that woke us
+        const bool idle = idleMin > 0
+            && now - g_lastActivityUs.load(std::memory_order_acquire) > gint64(idleMin) * 60 * 1000000;
+        if (!pressed && !idle) continue;
+        const gint64 before = suspendedUs();
+        qInfo("[sleep] suspending (%s)", pressed ? "power key" : "idle");
+        fflush(nullptr);
+        if (onSleep) onSleep();   // "sleeping" notice
+        // The panel's power regulator refuses to suspend for a few seconds after a screen update
+        // ("g2194-regulator: Can't suspend, vpdd timer running" -> EAGAIN), and we have just painted
+        // the notice. So wait, then retry a few times. Starting systemd-suspend.service directly
+        // blocks until the system is back (or the attempt failed) and still runs the sleep hooks.
+        for (int attempt = 1; attempt <= 5 && suspendedUs() - before < 500000; ++attempt) {
+            g_usleep(attempt == 1 ? 4000000 : 3000000);
+            const int rc = system("systemctl start systemd-suspend.service");
+            if (suspendedUs() - before < 500000) qInfo("[sleep] attempt %d did not suspend (rc=%d)", attempt, rc);
+        }
+        const gint64 slept = suspendedUs() - before;
+        qInfo("[sleep] %s after %.0f s", slept >= 500000 ? "woke" : "did not suspend", slept / 1e6);
+        if (fd >= 0) { struct input_event ev; while (read(fd, &ev, sizeof ev) == sizeof ev) {} }   // drop the wake press
+        const gint64 t = g_get_monotonic_time();
+        ignoreKeyUntil = t + 2000000;
+        g_lastActivityUs.store(t, std::memory_order_release);
+        if (slept >= 500000 && onWake) onWake();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // TouchReader — reads the finger digitizer straight from evdev on its own thread (the epaper QPA drops touch
 // into a null window, so Qt never delivers it, and that path crashes WebKit). Resolves the node by NAME
 // ("Elan touch input"), EVIOCGRABs it (the grab also silences the QPA's broken touch dispatch), decodes
@@ -3249,6 +3689,7 @@ Q_SIGNALS:
     void swipe(int dir);     // page turn (+1 next / -1 prev)
     void tap(int x, int y);  // tap at panel px -> the C++ tap router in main() (chrome / zones / content probe)
     void longPress(int x, int y);  // stationary hold (> tapMaxDwellMs) -> link peek
+    void hswipe(int dir);    // sideways swipe (+1 = finger left = next / -1 = previous) — paginated readers only
 public Q_SLOTS:
     void run() {
         blockSigterm(true);   // TERM belongs to the GUI thread between presents, not here
@@ -3338,6 +3779,7 @@ private:
     // in main(), a swipe turns the page. Each path is independently debounced.
     void emitGesture(int dx, int dy, int x, int y, gint64 downUs) {
         const gint64 now = g_get_monotonic_time();
+        g_lastActivityUs.store(now, std::memory_order_release);
         const int dwellMs = static_cast<int>((now - downUs) / 1000);
         const bool editing = g_urlEditing.load(std::memory_order_acquire);
         switch (classifyGesture(dx, dy, dwellMs)) {
@@ -3363,6 +3805,15 @@ private:
             m_lastSwipeUs = now;
             if (dy < 0) { qCDebug(lcEngine, "[touch] swipe up -> next");   Q_EMIT swipe(+1); }
             else        { qCDebug(lcEngine, "[touch] swipe down -> prev"); Q_EMIT swipe(-1); }
+            return;
+        case Gesture::SwipeLeft:
+        case Gesture::SwipeRight:
+            if (editing) return;
+            if (m_lastSwipeUs && now - m_lastSwipeUs < 800000) return;   // same pacing as a vertical turn
+            if (touchGuarded()) { qCDebug(lcEngine, "[touch] dropped (refresh guard)"); return; }
+            m_lastSwipeUs = now;
+            if (dx < 0) { qCDebug(lcEngine, "[touch] swipe left -> next");  Q_EMIT hswipe(+1); }
+            else        { qCDebug(lcEngine, "[touch] swipe right -> prev"); Q_EMIT hswipe(-1); }
             return;
         case Gesture::LongPress:
             if (editing) return;                                         // no peeking while the keyboard is up
@@ -3543,6 +3994,7 @@ int main(int argc, char **argv) {
     sigemptyset(&st.sa_mask);
     sigaction(SIGTERM, &st, nullptr);
     QGuiApplication app(argc, argv);
+    g_libbyMode = qgetenv("RMWEB_LIBBY") == "1";
     // Panel geometry from the QPA (epaper reports the real panel: 1620x2160 on the Paper Pro; the
     // Paper Pro Move differs) — BEFORE anything below uses kPanelW/kPanelH (engine ctor included).
     if (QScreen *scr = QGuiApplication::primaryScreen()) {
@@ -3741,6 +4193,10 @@ int main(int argc, char **argv) {
             view->forceNextContent();   // page-turn frame must paint immediately (bypass SPA throttle)
             if (dir > 0) engine.pageNext(); else engine.pagePrev();
         });
+        QObject::connect(&touchReader, &TouchReader::hswipe, &app, [&engine, view](int dir) {
+            view->forceNextContent();
+            engine.hSwipe(dir);
+        });
         // Reader-first tap routing (queued worker->GUI). The chrome is painted INTO the frame (B2), so we
         // hit-test it in C++: a tap on the bar runs its button; a tap on the page toggles chrome (hide when
         // shown -> read fullscreen, summon when hidden); with chrome hidden the tap-zones (tapzone.h) turn
@@ -3769,13 +4225,20 @@ int main(int argc, char **argv) {
                     case WpeView::ZoomIn:  view->forceNextContent(); engine.zoomBy(+1);   return;
                     case WpeView::Address: view->beginEdit();  return;   // open the on-screen URL keyboard
                     case WpeView::Bookmark: engine.toggleBookmark(); return;
+                    case WpeView::LShelf:  view->forceNextContent();
+                        engine.loadUrl(QStringLiteral("https://libbyapp.com/shelf")); return;
+                    case WpeView::LMode:
+                        view->setNotice(view->bwFast() ? QStringLiteral("Colour mode") : QStringLiteral("B&W fast mode"));
+                        engine.toggleBwFast(); return;
+                    case WpeView::LFont:   view->forceNextContent(); engine.cycleBookFont(); return;
+                    case WpeView::LClean:  view->clearGhosting(); return;
                     case WpeView::Power:
                         // Two-tap exit: the first tap only arms (toast, 3 s window — armPower).
                         // The second drains the panel (an active e-ink update must finish —
                         // drainForExit), flushes pending debounced profile writes (bounded wait on
                         // the worker — otherwise the last <=1.5 s of history/settings is lost), then
                         // std::_Exit skips WebKit teardown SIGABRT (watchdog-safe).
-                        if (!view->armPower()) return;
+                        if (!g_libbyMode && !view->armPower()) return;   // Libby toolbar: X closes in one tap
                         qInfo("[exit] power — draining panel, flushing profile, leaving");
                         view->drainForExit();
                         engine.flushSync();
@@ -3803,7 +4266,7 @@ int main(int argc, char **argv) {
                     if (a == rmweb::TapAction::Prev) {
                         view->forceNextContent(); engine.pagePrev(); return;
                     }
-                    if (a == rmweb::TapAction::SummonChrome) {
+                    if (a == rmweb::TapAction::SummonChrome && !engine.keyPaging()) {
                         view->setChromeOn(true);
                         return;
                     }
@@ -3814,15 +4277,35 @@ int main(int argc, char **argv) {
             }, Qt::QueuedConnection);
         // A content tap with no link underneath -> the old behaviour: toggle the chrome (show <-> hide).
         QObject::connect(&engine, &WpeEngine::linkMissed, win ? win : qobject_cast<QObject*>(&app),
-            [view]{ view->setChromeOn(!view->chromeOn()); }, Qt::QueuedConnection);
+            [view, &engine]{
+                if (view->chromeOn()) view->setChromeOn(false);
+                else if (engine.keyPaging()) { view->forceNextContent(); engine.clickLastTap(); }
+                else view->setChromeOn(true);
+            }, Qt::QueuedConnection);
         // Long-press on a link -> toast its target URL without navigating (peek, read-only probe).
         // Long-press on the CHROME is not a content peek — hit-test first (same as the tap path).
         QObject::connect(&touchReader, &TouchReader::longPress, win ? win : qobject_cast<QObject*>(&app),
             [&engine, view](int x, int y){
                 if (view->hitChrome(x, y) != WpeView::None) return;
+                if (engine.keyPaging() && !view->chromeOn()) { view->setChromeOn(true); return; }
                 engine.peekLink(x, y);
             }, Qt::QueuedConnection);
         touchThread.start();
+        // Power button / idle -> suspend to RAM; on wake, one full refresh so the panel is clean.
+        std::thread(sleepWatcher,
+            std::function<void()>([view]{
+                QMetaObject::invokeMethod(view, [view]{
+                    view->setNotice(QStringLiteral("Sleeping \u2014 press power to wake"));
+                }, Qt::QueuedConnection);
+            }),
+            std::function<void()>([view, &engine]{
+                QMetaObject::invokeMethod(view, [view]{ view->clearGhosting(); }, Qt::QueuedConnection);
+                engine.checkLoanExpiry();
+            })).detach();
+        { auto *loanTimer = new QTimer(&app);   // also while awake: every 10 min (first check after 1 min)
+          QObject::connect(loanTimer, &QTimer::timeout, &app, [&engine, loanTimer]{
+              loanTimer->setInterval(600000); engine.checkLoanExpiry(); });
+          loanTimer->start(60000); }
 
         // SIGTERM clean exit: the handler only latches g_termRequested (async-signal-safe); this poll
         // runs the real path on the GUI thread, where it is allowed to wait on the panel. From here on
@@ -3972,6 +4455,20 @@ int main(int argc, char **argv) {
         // DIAG (RMWEB_DEBUG_ZOOM): bump page zoom +2 steps after N ms (verify the scaling with RMWEB_GRAB_MS).
         if (const int zMs = qEnvironmentVariableIntValue("RMWEB_DEBUG_ZOOM"); zMs > 0) {
             QTimer::singleShot(zMs, &app, [&engine]{ qInfo("[zoom][dbg] +2"); engine.zoomBy(1); engine.zoomBy(1); });
+        }
+
+        QObject::connect(view, &WpeView::chromeShownChanged, &app, [&engine](bool on) { engine.setChromeShown(on); });
+        if (win) QObject::connect(&engine, &WpeEngine::dbgGrab, win, [win] {
+            const QImage g = win->grabWindow();
+            qInfo("[grab] %s", !g.isNull() && g.save("/home/root/rmweb/grab.png") ? "saved" : "FAILED");
+        }, Qt::QueuedConnection);
+        // Diagnostic: RMWEB_DEBUG_JSFILE=/path — poll the file every second, run it when it changes.
+        if (qEnvironmentVariableIsSet("RMWEB_DEBUG_JSFILE")) {
+            const std::string path = qgetenv("RMWEB_DEBUG_JSFILE").toStdString();
+            auto *t = new QTimer(&app);
+            QObject::connect(t, &QTimer::timeout, &app, [&engine, path] { engine.debugRunFile(path); });
+            t->start(1000);
+            qInfo("[dbg] polling %s", path.c_str());
         }
 
         // Diagnostic: auto-page every RMWEB_AUTOPAGE_MS ms (alternating direction) through the exact same

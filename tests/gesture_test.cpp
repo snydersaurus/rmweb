@@ -27,6 +27,13 @@ int main() {
     CHECK(classifyGesture(41, 0, 100)  == Gesture::None);        // 1px over tap move, short of a swipe
     CHECK(classifyGesture(0, 0, 701)   == Gesture::LongPress);   // 1ms over tap dwell -> long-press
 
+    // Horizontal swipes (defaults: hSwipeMinDx=200 inclusive, hSwipeMaxDy=150 exclusive)
+    CHECK(classifyGesture(-300, 0, 200)   == Gesture::SwipeLeft);  // finger left  = next page (paginated readers)
+    CHECK(classifyGesture(300, 20, 200)   == Gesture::SwipeRight); // finger right = prev page
+    CHECK(classifyGesture(-200, 149, 200) == Gesture::SwipeLeft);  // both boundaries hit exactly
+    CHECK(classifyGesture(-199, 0, 200)   == Gesture::None);       // dx one px short
+    CHECK(classifyGesture(-300, 150, 200) == Gesture::None);       // dy == hSwipeMaxDy: diagonal, rejected
+
     // Dwell gates only taps, not swipes
     CHECK(classifyGesture(0, 300, 5000) == Gesture::SwipeDown);  // slow swipe still turns the page
 
