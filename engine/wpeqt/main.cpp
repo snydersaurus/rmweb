@@ -134,6 +134,7 @@ enum { kQtfbInit = 0, kQtfbUpdate = 1, kQtfbTerminate = 3, kQtfbUserInput = 4, k
 enum { kQtfbFmtRmppRgba = 2, kQtfbFmtMoveRgba = 5 };            // RGBA8888 at the panel's native size
 enum { kQtfbModeFast = 1, kQtfbModeContent = 3, kQtfbModeUi = 4 };
 enum { kQtfbTouchPress = 0x10, kQtfbTouchRelease = 0x11, kQtfbTouchUpdate = 0x12 };
+enum { kQtfbPenPress = 0x20, kQtfbPenRelease = 0x21, kQtfbPenUpdate = 0x22 };
 struct QtfbSink {
     int sock = -1;
     uchar *shm = nullptr;
@@ -3970,11 +3971,19 @@ public Q_SLOTS:
         close(fd);
     }
 private:
-    // AppLoad window: touches arrive as messages on the qtfb socket, in framebuffer pixels. Follow
-    // the first finger from press to release and hand the result to the same gesture classifier.
+    // AppLoad window: touches and pen strokes arrive as messages on the qtfb socket, in framebuffer
+    // pixels. Follow one contact from press to release and hand it to the same gesture classifier.
+    // The pen counts as a finger (tap, swipe, long-press); while it is down, finger contacts are
+    // ignored, so a palm resting on the glass cannot turn the page mid-stroke.
     void runQtfb() {
-        int id = -1, x0 = 0, y0 = 0, lx = 0, ly = 0, seen = 0; gint64 downUs = 0;
-        qInfo("[touch] reading input from the AppLoad window");
+        struct Contact { bool down = false; int id = -1, x0 = 0, y0 = 0, lx = 0, ly = 0; gint64 downUs = 0; };
+        Contact finger, pen;
+        int seenTouch = 0, seenPen = 0;
+        qInfo("[touch] reading input from the AppLoad window (finger + pen)");
+        auto finish = [this](Contact &c) {
+            c.down = false; c.id = -1;
+            emitGesture(c.lx - c.x0, c.ly - c.y0, qBound(0, c.lx, kPanelW - 1), qBound(0, c.ly, kPanelH - 1), c.downUs);
+        };
         while (!m_stop.load()) {
             struct pollfd pfd = { g_qtfb->sock, POLLIN, 0 };
             if (poll(&pfd, 1, 500) <= 0) continue;
@@ -3987,14 +3996,28 @@ private:
             }
             if (n < 1 || m.type != kQtfbUserInput) continue;
             const auto &in = m.input;
+            const bool isPen = in.inputType >= kQtfbPenPress && in.inputType <= kQtfbPenUpdate;
+            int &seen = isPen ? seenPen : seenTouch;
             if (seen < 6) { ++seen; qInfo("[qtfb] input type=0x%x dev=%d x=%d y=%d d=%d", in.inputType, in.devId, in.x, in.y, in.d); }
-            if (in.inputType == kQtfbTouchPress && id < 0) {
-                id = in.devId; x0 = lx = in.x; y0 = ly = in.y; downUs = g_get_monotonic_time();
-            } else if (in.inputType == kQtfbTouchUpdate && in.devId == id) {
-                lx = in.x; ly = in.y;
-            } else if (in.inputType == kQtfbTouchRelease && in.devId == id) {
-                id = -1;
-                emitGesture(lx - x0, ly - y0, qBound(0, lx, kPanelW - 1), qBound(0, ly, kPanelH - 1), downUs);
+            if (isPen) {
+                if (in.inputType == kQtfbPenPress && !pen.down) {
+                    if (finger.down) { finger.down = false; finger.id = -1; }   // pen wins: drop a resting palm
+                    pen.down = true; pen.x0 = pen.lx = in.x; pen.y0 = pen.ly = in.y; pen.downUs = g_get_monotonic_time();
+                } else if (in.inputType == kQtfbPenUpdate && pen.down) {      // hover updates (pen up) are ignored
+                    pen.lx = in.x; pen.ly = in.y;
+                } else if (in.inputType == kQtfbPenRelease && pen.down) {
+                    finish(pen);
+                }
+                continue;
+            }
+            if (pen.down) continue;                                          // palm rejection while writing
+            if (in.inputType == kQtfbTouchPress && !finger.down) {
+                finger.down = true; finger.id = in.devId; finger.x0 = finger.lx = in.x; finger.y0 = finger.ly = in.y;
+                finger.downUs = g_get_monotonic_time();
+            } else if (in.inputType == kQtfbTouchUpdate && finger.down && in.devId == finger.id) {
+                finger.lx = in.x; finger.ly = in.y;
+            } else if (in.inputType == kQtfbTouchRelease && finger.down && in.devId == finger.id) {
+                finish(finger);
             }
         }
     }
