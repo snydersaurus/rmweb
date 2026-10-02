@@ -8,6 +8,17 @@ reader.
 It is unofficial and not affiliated with OverDrive, Libby or reMarkable. It needs developer mode,
 XOVI/AppLoad for the launcher icon, and a library card.
 
+## In short
+
+- **It is only about Libby.** Every change here exists to make reading a Libby loan on the tablet
+  pleasant. It is not a better general-purpose browser; for that, use upstream rmweb.
+- **It is a personal setup, shared as-is.** One person, one tablet, no releases and no prebuilt
+  download: you install upstream's release, then build this fork's program yourself (about a
+  minute once Docker and the SDK image are set up) and copy it over.
+- **The tweaks are small in kind.** rmweb drives pages with scripts; Libby's reader only answers
+  to real keys, clicks and scrolls. Most of the fork is passing those through, plus a toolbar,
+  sleep handling, and one opt-in TLS setting the tablet needs before Libby's servers will connect.
+
 ## What the fork adds
 
 - **Page turns and taps in Libby's reader.** Swipes and edge taps are sent as real arrow keys, and
