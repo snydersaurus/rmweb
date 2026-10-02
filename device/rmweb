@@ -106,9 +106,17 @@ fi
 . "$R/rmweb-env.sh"
 
 rotate_log   # the app's own append below is the main growth source
-log "launch rmweb-wpeqt $*"
-"$R/bin/rmweb-wpeqt" "$@" >> "$LOG" 2>&1 &
-APP=$!
-wait "$APP"
-log "rmweb-wpeqt exited rc=$?"
+# Exit code 75 = "start me again": the app changed something that only takes effect in a fresh
+# process (the opt-in TLS option, read by rmweb-env.sh). xochitl stays stopped across the restart.
+while :; do
+  log "launch rmweb-wpeqt $*"
+  "$R/bin/rmweb-wpeqt" "$@" >> "$LOG" 2>&1 &
+  APP=$!
+  wait "$APP"
+  rc=$?
+  log "rmweb-wpeqt exited rc=$rc"
+  [ "$rc" = 75 ] || break
+  # shellcheck source=/dev/null
+  . "$R/rmweb-env.sh"
+done
 # EXIT trap -> cleanup -> restores xochitl.

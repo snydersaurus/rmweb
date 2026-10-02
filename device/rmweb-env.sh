@@ -23,3 +23,9 @@ export RMWEB_BLOCK RMWEB_UA RMWEB_SITECSS               # content/UA/readability
 # Display path: epaper QPA, basic render loop (so afterRendering fires on the GUI thread).
 export QT_QPA_PLATFORM=epaper QT_QUICK_BACKEND="${RMWEB_QUICK_BACKEND:-epaper}" QSG_RENDER_LOOP=basic
 export RMWEB_PRESENT_DWELL RMWEB_DPR RMWEB_READER_FONT RMWEB_READER_DIR RMWEB_FULL_EVERY RMWEB_AUTOREFRESH_MS  # runtime levers
+# Opt-in TLS option (docs/tls.md): Libby's API hosts need three cipher suites the tablet's system
+# policy leaves out. Nothing is loosened unless the owner has created the marker file — by hand,
+# or from the page the app shows when Libby's servers refuse the connection.
+if [ -f "$R/tls-compat.on" ] && [ -f "$R/openssl-rmweb.cnf" ]; then
+  export OPENSSL_CONF="$R/openssl-rmweb.cnf"
+fi

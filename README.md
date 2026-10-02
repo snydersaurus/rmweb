@@ -38,8 +38,8 @@ XOVI/AppLoad for the launcher icon, and a library card.
 - It does not touch DRM, download books, or save any book content to disk. Libby's reader renders
   the book and checks the loan; the book exists only in the open session's memory.
 - It leaves the reader when the loan's due date passes.
-- It does not install the TLS configuration Libby needs. That is an explicit opt-in:
-  see [docs/tls.md](docs/tls.md).
+- It does not switch on the TLS option Libby needs by itself. The app explains it and asks the
+  first time Libby cannot connect: see [docs/tls.md](docs/tls.md).
 
 Whether a modified client is acceptable under OverDrive's terms is for each user to judge; the
 clauses that come closest concern scraping, extraction and server load.
@@ -52,8 +52,8 @@ clauses that come closest concern scraping, extraction and server load.
    unpack the tarball into AppLoad's folder. Or build and package it yourself. The last two are in
    [docs/libby-wrapper.md](docs/libby-wrapper.md). It is one self-contained AppLoad folder; a
    separate rmweb install is not needed.
-3. Turn on the TLS option if you accept its trade-off: [docs/tls.md](docs/tls.md). Libby will not
-   connect without it.
+3. Open Libby. The app will tell you about one TLS option it needs and offer to turn it on;
+   [docs/tls.md](docs/tls.md) has the details. Libby will not connect without it.
 
 ## Status
 

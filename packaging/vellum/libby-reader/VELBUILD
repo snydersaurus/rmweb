@@ -1,6 +1,6 @@
 maintainer="Bill Snyder <wsnyder6@gmail.com>"
 pkgname=libby-reader
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=0
 pkgdesc="Read Libby library loans in Libby's own web reader (a Libby-focused build of rmweb)"
 upstream_author="snydersaurus"
@@ -36,12 +36,16 @@ postinstall() {
 	cat <<MSG
 libby-reader: installed. Restart xochitl through XOVI to see the Libby icon in AppLoad.
 
-Libby will not connect until the opt-in TLS option is on. It widens, for this app only, the
-cipher list reMarkable ships. Read what it changes first:
+Libby's servers will refuse the connection until an opt-in TLS option is on. It widens, for this
+app only, the cipher list reMarkable ships. The app explains this and offers to turn it on the
+first time it cannot connect. What it changes:
   https://github.com/snydersaurus/rmweb/blob/libby-key-paging/docs/tls.md
-To turn it on:   touch /home/root/xovi/exthome/appload/libby/tls-compat.on
-To turn it off:  rm /home/root/xovi/exthome/appload/libby/tls-compat.on
+To turn it off again:  rm /home/root/xovi/exthome/appload/libby/tls-compat.on
 MSG
+}
+
+postupgrade() {
+	:
 }
 
 postdeinstall() {
@@ -54,5 +58,5 @@ postdeinstall() {
 }
 
 sha512sums="
-d7e8aff1b2b9bc0e837d8af23fbeb7d50bb298f10faece6b5da9d4c64bf479e98c45ccaa79304990be30f2c45cb077023a5181b561ae703f8f8cb76c61a98694  libby-0.1.0.tar.gz
+752cc47f1e84f3b2cbcdf974bce79cad97a5474db909a5791c950d9e68dad60ae50bc192c9bd927865eb7d0cad8ee41c82e6f240e1a463e6ee3bdd63f63aefa2  libby-0.2.0.tar.gz
 "

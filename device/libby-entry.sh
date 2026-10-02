@@ -14,9 +14,7 @@ export RMWEB_LIBBY=1
 # B&W fast mode (toolbar button) skips the per-page quality redraw; this sets how often the
 # anti-ghost full flash runs instead (every N content presents, default 100).
 export RMWEB_FULL_EVERY="${RMWEB_FULL_EVERY:-6}"
-# TLS compatibility is opt-in (docs/tls.md): Libby's API hosts need three cipher suites the
-# tablet's system policy leaves out. Nothing is loosened unless the owner creates the marker file.
-[ -f "$R/tls-compat.on" ] && export OPENSSL_CONF="$R/openssl-rmweb.cnf"
+# The opt-in TLS option is applied by rmweb-env.sh (marker file tls-compat.on; docs/tls.md).
 if command -v systemd-run >/dev/null 2>&1; then
   exec systemd-run --unit=rmweb-appload --scope --quiet "$R/rmweb" "$URL"
 fi

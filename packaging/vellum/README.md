@@ -14,8 +14,8 @@ Each [release](https://github.com/snydersaurus/rmweb/releases) carries
 `libby-reader-<version>-r0.apk` and the public half of the key it is signed with.
 
 ```sh
-scp libby-reader-0.1.0-r0.apk root@10.11.99.1:/home/root/
-ssh root@10.11.99.1 '/home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.1.0-r0.apk'
+scp libby-reader-0.2.0-r0.apk root@10.11.99.1:/home/root/
+ssh root@10.11.99.1 '/home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.2.0-r0.apk'
 ```
 
 `--allow-untrusted` installs it without checking the signature. To have Vellum verify it instead,
@@ -25,9 +25,9 @@ flag. That makes Vellum trust anything signed with that key, so only do it if yo
 Both steps can be done from inside reManager with its file browser and terminal. The package
 depends on `launcher`, so Vellum pulls in XOVI and AppLoad if they are missing.
 
-After installing, restart xochitl through XOVI to get the Libby icon, then read
-[docs/tls.md](../../docs/tls.md): Libby does not connect until the opt-in TLS option is on. The
-install prints the same reminder.
+After installing, restart xochitl through XOVI to get the Libby icon. Libby does not connect
+until an opt-in TLS option is on; the app explains it and offers to turn it on the first time it
+cannot connect ([docs/tls.md](../../docs/tls.md)).
 
 Remove with `vellum del libby-reader` (keeps the log and the TLS choice) or
 `vellum purge libby-reader` (clears the app folder). The browser profile in `/home/root/.rmweb` is
@@ -55,4 +55,4 @@ submit quietly.
 
 Built with vbuild 0.0.36 and installed with `vellum add --allow-untrusted` on one Paper Pro Move
 (Vellum 0.3.1, OS 3.27.3) on 2026-10-02; the app launched afterwards and the TLS marker survived
-the install. Verified-signature install, upgrade and removal are untested.
+the install. Verified-signature install and removal are untested.

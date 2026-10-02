@@ -20,6 +20,7 @@ All in `engine/wpeqt/main.cpp` unless noted.
 | User files | Optional `<profile>/user.css` and `<profile>/user.js` (all frames). `user.js` can log with `window.webkit.messageHandlers.rmweb.postMessage(...)`. |
 | Sleep | Power button or 15 idle minutes (`RMWEB_IDLE_SLEEP_MIN`, 0 = never) suspends to RAM; the open book survives, so reading continues offline after wake. |
 | Loan guard | Reads the open title's `expireTime` from Libby's `localStorage` and leaves the reader once the loan has ended. |
+| TLS option page | When Libby's API hosts refuse the handshake, an in-app page explains the opt-in TLS option; a tap turns it on and the launcher restarts the app (exit code 75). |
 | Launcher | `device/libby-entry.sh` + `device/appload/libby/` = a "Libby" AppLoad icon. |
 
 ## Building without rebuilding WebKit
@@ -59,8 +60,9 @@ Then restart xochitl through XOVI (or reboot and re-enable XOVI) so AppLoad sees
 
 1. XOVI and AppLoad must already be installed (for example with reManager/Vellum).
 2. **TLS.** Libby's API hosts cannot complete a handshake under the device's system TLS policy.
-   The app ships the per-app config but leaves it off; what it changes and how to turn it on,
-   verify and undo it are in [tls.md](tls.md). No script turns it on.
+   The app ships the per-app config but leaves it off. The first time it cannot reach Libby's
+   servers it shows a page explaining the option and offers to turn it on; what it changes and
+   how to verify and undo it are in [tls.md](tls.md). No script turns it on.
 3. Sign in to Libby once (a setup code from another device works).
 4. Reading settings: the toolbar's B&W button (`bwFast=1` in `/home/root/.rmweb/settings.txt`);
    the launcher sets `RMWEB_FULL_EVERY=6` (cleaning flash every 6 presents).

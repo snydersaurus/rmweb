@@ -332,6 +332,7 @@ Q_SIGNALS:
     void dbgGrab();                                // RMWEB_DEBUG_JSFILE "#grab": save the composited window
     void notice(const QString &text);              // transient toast in the chrome (find results, downloads)
     void ghostClearRequested();                    // settings-page "Clear ghosting now" -> view does a full develop
+    void restartRequested();                       // quit with code 75: the launcher starts us again (new env)
     void fieldFocused(const QString &value, bool masked, const QString &suggest); // a text field was tapped -> open the keyboard (suggest = autofill prefill for an empty field, may be empty)
     void tlsStateChanged(int state);                 // 0 = http/none, 1 = https ok, 2 = https with cert errors
     void readProgressChanged(double frac);           // reading position 0..1 of the scrollable page; -1 = hide (page doesn't scroll)
@@ -541,6 +542,29 @@ public Q_SLOTS:
                     qWarning("[tls] tls-continue rejected (gesture=%d errorHost=%s current=%s)",
                              expectUserNav, self->m_tlsErrorHost.c_str(), cur ? cur : "(none)");
                     webkit_policy_decision_ignore(dec);
+                    return TRUE;
+                }
+                // The TLS-option page (showTlsPrompt) has two commands of its own. Enabling changes
+                // which cipher suites this app accepts, so it needs our page AND a real tap
+                // (expectUserNav — see tls-continue above); page script alone cannot trigger it.
+                const std::string tlsPage = "file://" + self->m_profileDir + "/tls.html";
+                if (cur && std::string(cur) == tlsPage && (cmd == "tls-enable" || cmd == "tls-skip")) {
+                    webkit_policy_decision_ignore(dec);
+                    if (cmd == "tls-skip") {
+                        self->marshalToCtx([self] {
+                            self->m_expectUserNav = true;
+                            if (self->m_view) webkit_web_view_load_uri(self->m_view, "https://libbyapp.com/shelf");
+                        });
+                    } else if (!expectUserNav) {
+                        qWarning("[tlsopt] enable rejected: not a tap");
+                    } else if (g_file_set_contents(tlsMarkerPath().c_str(), "", 0, nullptr)) {
+                        qInfo("[tlsopt] enabled by the user (%s) — restarting", tlsMarkerPath().c_str());
+                        Q_EMIT self->notice(QStringLiteral("Turned on \u2014 restarting"));
+                        Q_EMIT self->restartRequested();
+                    } else {
+                        qWarning("[tlsopt] could not write %s", tlsMarkerPath().c_str());
+                        Q_EMIT self->notice(QStringLiteral("Could not save the setting"));
+                    }
                     return TRUE;
                 }
                 // rmweb: commands mutate the profile — honour them ONLY from our own generated pages
@@ -1233,6 +1257,61 @@ public Q_SLOTS:
         webkit_user_content_manager_add_style_sheet(m_ucm, m_insetSheet);
         m_insetZoom = m_zoom;
     }
+    // --- Opt-in TLS option (docs/tls.md) --------------------------------------------------
+    // The launcher only points OpenSSL at <root>/openssl-rmweb.cnf when <root>/tls-compat.on
+    // exists. Without it Libby's pages load but its API hosts refuse the handshake, and the site
+    // just spins. So in Libby mode, once per run, try one of those hosts ourselves; if TLS is
+    // what fails, show a page that explains the option and lets the owner turn it on.
+    static std::string tlsMarkerPath() { return rmwebRoot() + "/tls-compat.on"; }
+    void probeLibbyTls() {   // worker thread
+        if (!g_libbyMode || m_tlsProbed) return;
+        m_tlsProbed = true;
+        const char *conf = getenv("OPENSSL_CONF");
+        if ((conf && *conf) || g_file_test(tlsMarkerPath().c_str(), G_FILE_TEST_EXISTS)
+            || !g_file_test((rmwebRoot() + "/openssl-rmweb.cnf").c_str(), G_FILE_TEST_EXISTS)) return;
+        GSocketClient *c = g_socket_client_new();
+        g_socket_client_set_tls(c, TRUE);
+        g_socket_client_set_timeout(c, 10);
+        g_socket_client_connect_to_host_async(c, "sentry.libbyapp.com", 443, m_cancel,
+            [](GObject *src, GAsyncResult *res, gpointer data) {
+                GError *err = nullptr;
+                GSocketConnection *conn = g_socket_client_connect_to_host_finish(G_SOCKET_CLIENT(src), res, &err);
+                g_object_unref(src);
+                if (conn) { qInfo("[tlsopt] probe: Libby's API host connects — nothing to do"); g_object_unref(conn); return; }
+                if (g_error_matches(err, G_IO_ERROR, G_IO_ERROR_CANCELLED)) { g_clear_error(&err); return; }
+                const bool tls = err && err->domain == G_TLS_ERROR;
+                qInfo("[tlsopt] probe failed (%s): %s", tls ? "TLS" : "not TLS", err ? err->message : "?");
+                g_clear_error(&err);
+                if (tls) static_cast<WpeEngine*>(data)->showTlsPrompt();
+            }, this);
+    }
+    void showTlsPrompt() {   // worker thread
+        if (!m_view) return;
+        static const char *html =
+            "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
+            "<style>body{font-family:'Noto Sans',sans-serif;margin:0;padding:28px 30px;color:#000;background:#fff;"
+            "font-size:21px;line-height:1.45}h1{font-size:30px;line-height:1.2;margin:8px 0 18px}p{margin:0 0 16px}"
+            "a.btn{display:block;text-align:center;text-decoration:none;color:#000;border:3px solid #000;"
+            "border-radius:14px;padding:18px 12px;margin:22px 0 0;font-weight:bold;font-size:23px}"
+            "a.primary{background:#000;color:#fff}.small{font-size:17px;color:#333;margin-top:26px}</style></head><body>"
+            "<h1>One setting before Libby can connect</h1>"
+            "<p>Libby's pages load, but its servers are turning this tablet's connection away.</p>"
+            "<p>reMarkable ships the tablet with a shorter list of allowed encryption methods than web "
+            "browsers normally use. Libby's servers need one that is not on that list.</p>"
+            "<p>Turning this setting on adds three standard encryption methods back, for this app only. "
+            "Encryption and certificate checks stay on, and nothing else on the tablet changes. "
+            "It applies to every site opened in this app, not only Libby.</p>"
+            "<a class='btn primary' href='rmweb:tls-enable'>Turn it on and restart</a>"
+            "<a class='btn' href='rmweb:tls-skip'>Not now</a>"
+            "<p class='small'>To turn it off later, delete the file <b>tls-compat.on</b> in the app's folder. "
+            "The full explanation is in docs/tls.md at github.com/snydersaurus/rmweb.</p>"
+            "</body></html>";
+        const std::string path = m_profileDir + "/tls.html";
+        if (!rmweb::detail::atomicWrite(path, html)) return;
+        qInfo("[tlsopt] showing the option page");
+        m_expectUserNav = true;
+        webkit_web_view_load_uri(m_view, ("file://" + path).c_str());
+    }
     // Libby toolbar actions (GUI thread -> worker).
     void toggleBwFast() { marshalToCtx([this] { toggleBwFastSetting(); }); }
     void cycleBookFont() {
@@ -1865,6 +1944,7 @@ private:
         qInfo("[nav] uri=%s", u ? u : "");
         self->m_keyPaging.store(keyPagingUrl(u), std::memory_order_release);
         self->applyTopInset();
+        if (libbyUrl(u)) self->probeLibbyTls();
         // Generated pages loaded with an about:blank base (address-bar search results) must not
         // clobber the address bar — the typed query stays (set when the search was kicked off).
         if (u && std::string(u) == "about:blank") return;
@@ -2480,6 +2560,7 @@ private:
     GSource *m_scrollSaveSrc = nullptr;             // pending debounced scroll-position write
     GSource *m_tabsSaveSrc = nullptr;               // pending debounced tabs write
     std::string m_curUrl, m_curTitle;               // current committed page (for history + bookmark)
+    bool m_tlsProbed = false;                       // probeLibbyTls ran this session
     bool m_chromeShown = true;                      // toolbar visible (mirrors WpeView; worker thread)
     WebKitUserStyleSheet *m_insetSheet = nullptr;   // Libby-mode top inset sheet (we hold a ref)
     double m_insetZoom = 0;                         // zoom the inset sheet was computed for
@@ -4495,6 +4576,14 @@ int main(int argc, char **argv) {
         }
 
         QObject::connect(view, &WpeView::chromeShownChanged, &app, [&engine](bool on) { engine.setChromeShown(on); });
+        QObject::connect(&engine, &WpeEngine::restartRequested, &app, [&engine, view] {
+            qInfo("[exit] restart requested — draining panel, flushing profile, leaving with 75");
+            QTimer::singleShot(1200, view, [&engine, view] {   // let the toast reach the panel
+                view->drainForExit();
+                engine.flushSync();
+                std::_Exit(75);
+            });
+        }, Qt::QueuedConnection);
         if (win) QObject::connect(&engine, &WpeEngine::dbgGrab, win, [win] {
             const QImage g = win->grabWindow();
             qInfo("[grab] %s", !g.isNull() && g.save(QString::fromStdString(rmwebRoot() + "/grab.png")) ? "saved" : "FAILED");

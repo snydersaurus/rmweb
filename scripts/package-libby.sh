@@ -25,10 +25,13 @@ find "$OUT" -name '._*' -delete          # AppleDouble files that ride along in 
 
 install -m 755 build/rmweb-wpeqt        "$OUT/bin/rmweb-wpeqt"
 install -m 755 device/libby-entry.sh    "$OUT/libby-entry.sh"
+install -m 755 device/rmweb             "$OUT/rmweb"            # this fork's launcher (restart on exit 75)
+install -m 644 device/rmweb-env.sh      "$OUT/rmweb-env.sh"     # ... and env (opt-in TLS marker)
 install -m 644 device/openssl-rmweb.cnf "$OUT/openssl-rmweb.cnf"
 install -m 644 device/appload/libby/external.manifest.json device/appload/libby/icon.png "$OUT/"
 install -m 644 LICENSE NOTICE "$OUT/"
 echo "$VER" > "$OUT/LIBBY_VERSION"
+sed -i.bak "s/\"version\": \"[^\"]*\"/\"version\": \"$VER\"/" "$OUT/external.manifest.json" && rm -f "$OUT/external.manifest.json.bak"
 cat > "$OUT/SOURCES" <<SRC
 This app: https://github.com/snydersaurus/rmweb (branch libby-key-paging), version $VER
 Based on: https://github.com/exp78/rmweb release $(cat "$OUT/VERSION")
