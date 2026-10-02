@@ -55,4 +55,5 @@ submit quietly.
 
 Built with vbuild 0.0.36 and installed with `vellum add --allow-untrusted` on one Paper Pro Move
 (Vellum 0.3.1, OS 3.27.3) on 2026-10-02; the app launched afterwards and the TLS marker survived
-the install. Verified-signature install and removal are untested.
+the install. A 0.1.0 to 0.2.0 upgrade through Vellum was also done there and kept the TLS marker.
+Verified-signature install and removal are untested.
