@@ -1,0 +1,58 @@
+maintainer="Bill Snyder <wsnyder6@gmail.com>"
+pkgname=libby-reader
+pkgver=0.1.0
+pkgrel=0
+pkgdesc="Read Libby library loans in Libby's own web reader (a Libby-focused build of rmweb)"
+upstream_author="snydersaurus"
+category="apps"
+url="https://github.com/$upstream_author/rmweb"
+arch="aarch64"
+license="MIT AND LGPL-2.1-or-later AND LGPL-2.0-or-later AND BSD-2-Clause AND BSD-3-Clause AND Apache-2.0 WITH LLVM-exception"
+depends="launcher"
+readmeurl="https://raw.githubusercontent.com/$upstream_author/rmweb/libby-v$pkgver/README.md"
+
+# One prebuilt, self-contained AppLoad app folder (scripts/package-libby.sh in the url repo):
+# rmweb 0.9.7's WebKit/Mesa bundle plus the Libby build of rmweb-wpeqt. Nothing is compiled here,
+# and the bundled libraries must stay as they are: no stripping, no dependency tracing (they are
+# private to the app and resolved through its own lib/ directory).
+source="libby-$pkgver.tar.gz::https://github.com/$upstream_author/rmweb/releases/download/libby-v$pkgver/libby-$pkgver.tar.gz"
+options="!check !fhs !strip !tracedeps"
+
+_appdir=/home/root/xovi/exthome/appload/libby
+
+package() {
+	install -d "$pkgdir"/home/root/xovi/exthome/appload
+	cp -a "$srcdir"/libby "$pkgdir"/home/root/xovi/exthome/appload/
+
+	install -Dm644 "$srcdir"/libby/LICENSE \
+		"$pkgdir"/home/root/.vellum/licenses/$pkgname/LICENSE
+	install -Dm644 "$srcdir"/libby/NOTICE \
+		"$pkgdir"/home/root/.vellum/licenses/$pkgname/NOTICE
+	install -Dm644 "$srcdir"/libby/SOURCES \
+		"$pkgdir"/home/root/.vellum/licenses/$pkgname/SOURCES
+}
+
+postinstall() {
+	cat <<MSG
+libby-reader: installed. Restart xochitl through XOVI to see the Libby icon in AppLoad.
+
+Libby will not connect until the opt-in TLS option is on. It widens, for this app only, the
+cipher list reMarkable ships. Read what it changes first:
+  https://github.com/snydersaurus/rmweb/blob/libby-key-paging/docs/tls.md
+To turn it on:   touch /home/root/xovi/exthome/appload/libby/tls-compat.on
+To turn it off:  rm /home/root/xovi/exthome/appload/libby/tls-compat.on
+MSG
+}
+
+postdeinstall() {
+	# Files the app creates at run time are not tracked by apk. A plain removal keeps them
+	# (including the TLS choice); a purge clears the folder. The browser profile in
+	# /home/root/.rmweb is shared with a plain rmweb install and is left alone either way.
+	if [ "$VELLUM_PURGE" = "1" ]; then
+		rm -rf /home/root/xovi/exthome/appload/libby
+	fi
+}
+
+sha512sums="
+d7e8aff1b2b9bc0e837d8af23fbeb7d50bb298f10faece6b5da9d4c64bf479e98c45ccaa79304990be30f2c45cb077023a5181b561ae703f8f8cb76c61a98694  libby-0.1.0.tar.gz
+"

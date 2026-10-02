@@ -47,9 +47,11 @@ clauses that come closest concern scraping, extraction and server load.
 ## Getting started
 
 1. Have XOVI and AppLoad on the tablet (reManager/Vellum is the easy way).
-2. Get the app onto the tablet: unpack the release tarball into AppLoad's folder, or build and
-   package it yourself. Both are in [docs/libby-wrapper.md](docs/libby-wrapper.md). It is one
-   self-contained AppLoad folder; a separate rmweb install is not needed.
+2. Get the app onto the tablet. From a [release](https://github.com/snydersaurus/rmweb/releases):
+   install the `.apk` with Vellum ([packaging/vellum/README.md](packaging/vellum/README.md)), or
+   unpack the tarball into AppLoad's folder. Or build and package it yourself. The last two are in
+   [docs/libby-wrapper.md](docs/libby-wrapper.md). It is one self-contained AppLoad folder; a
+   separate rmweb install is not needed.
 3. Turn on the TLS option if you accept its trade-off: [docs/tls.md](docs/tls.md). Libby will not
    connect without it.
 
