@@ -379,6 +379,35 @@ public Q_SLOTS:
         qInfo("[t] display connected @%.0fms", msSince(m_startUs));
 
         m_ucm = webkit_user_content_manager_new();   // holds the content-blocking filter (added async below)
+        // Libby mode: text fields inside cross-origin frames (Libby's note box lives in its reader
+        // frame) are out of reach of the tap probe, which only sees the top document. A tiny script
+        // in every CHILD frame reports when such a field gets focus, so our keyboard can open and
+        // type into it with real key presses (typeIntoFocused).
+        if (g_libbyMode) {
+            static const char *kFrameFieldJs =
+                "(function(){if(window.top===window)return;"
+                "document.addEventListener('focusin',function(e){var t=e.target;if(!t||!t.tagName)return;"
+                "var ty=(t.type||'').toLowerCase();"
+                "var ok=t.isContentEditable||t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&"
+                "/^(|text|search|email|url|tel|number)$/.test(ty));if(!ok)return;"
+                "try{window.webkit.messageHandlers.rmwebField.postMessage("
+                "String(t.value!==undefined?t.value:(t.textContent||'')));}catch(x){}},true);})();";
+            WebKitUserScript *us = webkit_user_script_new(kFrameFieldJs, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+                WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_END, nullptr, nullptr);
+            webkit_user_content_manager_add_script(m_ucm, us);
+            webkit_user_script_unref(us);
+            g_signal_connect(m_ucm, "script-message-received::rmwebField",
+                G_CALLBACK(+[](WebKitUserContentManager *, JSCValue *v, gpointer data) {
+                    auto *self = static_cast<WpeEngine*>(data);
+                    char *c = jsc_value_to_string(v);
+                    const QString value = QString::fromUtf8(c ? c : "");
+                    g_free(c);
+                    self->m_frameField = true;
+                    qInfo("[form] field focused inside a frame (%lld chars) - keyboard types into it", (long long)value.size());
+                    Q_EMIT self->fieldFocused(value, false, QString());
+                }), this);
+            webkit_user_content_manager_register_script_message_handler(m_ucm, "rmwebField", nullptr);
+        }
         // Readability user stylesheet (kSiteCss): keep wide media/tables from forcing horizontal scroll on the
         // narrow viewport. Applies to every page; reader mode replaces the DOM so it's harmless there too.
         // Persisted setting (settings page); RMWEB_SITECSS env, when present, wins for this run.
@@ -1036,6 +1065,7 @@ public Q_SLOTS:
     void probeWith(int x, int y, bool peek) {
         marshalToCtx([this, x, y, peek] {
             if (!m_view) return;
+            if (!peek) m_frameField = false;
             m_lastProbePeek = peek;
             if (!peek) { m_lastTapX = x; m_lastTapY = y; }
             // A link tap navigates via synthetic JS (location.href=... in the probe below) — WebKit
@@ -1118,6 +1148,39 @@ public Q_SLOTS:
     // Commit the keyboard text into the last focused field (window.__rmwebField, stashed by the tap
     // probe). The NATIVE value setter + input/change events make framework-controlled components
     // (React & co.) register a real edit. Empty text clears the field.
+    // Go on the keyboard. A field inside a frame gets the text as real key presses (select-all
+    // first, so the keyboard's prefilled value replaces the field's content instead of doubling
+    // it); a top-document field keeps the JS commit, which also feeds autofill learning.
+    void commitFieldText(const QString &text) {
+        marshalToCtx([this, text] {
+            if (!m_frameField) return;
+            m_frameField = false;
+            typeIntoFocused(text);
+        });
+    }
+    bool frameFieldPending() const { return m_frameField; }   // GUI reads it only to pick the path
+    void typeIntoFocused(const QString &text) {   // worker thread
+        WPEView *v = m_view ? webkit_web_view_get_wpe_view(m_view) : nullptr;
+        if (!v) return;
+        if (!wpe_view_get_has_focus(v)) wpe_view_focus_in(v);
+        auto key = [v](guint keyval, guint keycode, WPEModifiers mods) {
+            const guint32 t = static_cast<guint32>(g_get_monotonic_time() / 1000);
+            for (WPEEventType type : { WPE_EVENT_KEYBOARD_KEY_DOWN, WPE_EVENT_KEYBOARD_KEY_UP }) {
+                WPEEvent *ev = wpe_event_keyboard_new(type, v, WPE_INPUT_SOURCE_KEYBOARD, t, mods, keycode, keyval);
+                if (ev) { wpe_view_event(v, ev); wpe_event_unref(ev); }
+            }
+        };
+        key('a', KEY_A + 8, WPE_MODIFIER_KEYBOARD_CONTROL);   // select all: replace, don't append
+        int n = 0;
+        for (const char32_t c : text.toStdU32String()) {
+            if (c == U'\n') key(WPE_KEY_Return, KEY_ENTER + 8, static_cast<WPEModifiers>(0));
+            else if (c == U'\t') continue;
+            else key(c < 0x100 ? guint(c) : guint(0x01000000u | c), 0, static_cast<WPEModifiers>(0));   // Unicode keysyms
+            ++n;
+        }
+        if (text.isEmpty()) key(WPE_KEY_BackSpace, KEY_BACKSPACE + 8, static_cast<WPEModifiers>(0));   // empty Go clears
+        qInfo("[form] typed %d characters into the focused frame field", n);
+    }
     void setFieldText(const QString &text) {
         marshalToCtx([this, text] {
             if (!m_view) return;
@@ -2561,6 +2624,7 @@ private:
     GSource *m_tabsSaveSrc = nullptr;               // pending debounced tabs write
     std::string m_curUrl, m_curTitle;               // current committed page (for history + bookmark)
     bool m_tlsProbed = false;                       // probeLibbyTls ran this session
+    std::atomic<bool> m_frameField{false};          // the open keyboard belongs to a field inside a frame
     bool m_chromeShown = true;                      // toolbar visible (mirrors WpeView; worker thread)
     WebKitUserStyleSheet *m_insetSheet = nullptr;   // Libby-mode top inset sheet (we hold a ref)
     double m_insetZoom = 0;                         // zoom the inset sheet was computed for
@@ -4280,6 +4344,7 @@ int main(int argc, char **argv) {
                          Qt::QueuedConnection);
         QObject::connect(view, &WpeView::fieldTextEntered, &app, [&engine, view](const QString &t){
             view->forceNextContent();   // the DOM edit must paint promptly
+            if (engine.frameFieldPending()) { engine.commitFieldText(t); return; }   // Libby's note box & co.
             engine.setFieldText(t);
             engine.learnFieldText(t);
         });
