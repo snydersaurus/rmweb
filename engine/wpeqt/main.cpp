@@ -1526,6 +1526,34 @@ public Q_SLOTS:
                                             0, 0, TRUE, TRUE, x, y);
         if (st) { wpe_view_event(v, st); wpe_event_unref(st); }
     }
+    // Real mouse drag in the page (panel px in; view coords = panel px / dpr). phase 0 presses the
+    // button at (x,y), 1 moves with it held, 2 releases — WebKit turns that into a text selection.
+    void pointerDrag(int phase, int px, int py) {
+        marshalToCtx([this, phase, px, py] {
+            WPEView *v = m_view ? webkit_web_view_get_wpe_view(m_view) : nullptr;
+            if (!v) return;
+            const double x = px / m_dpr, y = py / m_dpr;
+            const guint32 t = static_cast<guint32>(g_get_monotonic_time() / 1000);
+            WPEEvent *ev = nullptr;
+            if (phase == 0) {
+                WPEEvent *mv = wpe_event_pointer_move_new(WPE_EVENT_POINTER_MOVE, v, WPE_INPUT_SOURCE_MOUSE, t,
+                                                          static_cast<WPEModifiers>(0), x, y, 0, 0);
+                if (mv) { wpe_view_event(v, mv); wpe_event_unref(mv); }
+                ev = wpe_event_pointer_button_new(WPE_EVENT_POINTER_DOWN, v, WPE_INPUT_SOURCE_MOUSE, t,
+                                                  WPE_MODIFIER_POINTER_BUTTON1, 1, x, y, 1);
+                m_dragX = x; m_dragY = y;
+            } else if (phase == 1) {
+                ev = wpe_event_pointer_move_new(WPE_EVENT_POINTER_MOVE, v, WPE_INPUT_SOURCE_MOUSE, t,
+                                                WPE_MODIFIER_POINTER_BUTTON1, x, y, x - m_dragX, y - m_dragY);
+                m_dragX = x; m_dragY = y;
+            } else {
+                ev = wpe_event_pointer_button_new(WPE_EVENT_POINTER_UP, v, WPE_INPUT_SOURCE_MOUSE, t,
+                                                  static_cast<WPEModifiers>(0), 1, x, y, 0);
+            }
+            if (ev) { wpe_view_event(v, ev); wpe_event_unref(ev); }
+            if (phase != 1) qInfo("[pen] drag %s %.0f,%.0f", phase == 0 ? "start" : "end", x, y);
+        });
+    }
     void sendTouchSwipe(double x1, double y1, double x2, double y2) {
         WPEView *v = webkit_web_view_get_wpe_view(m_view);
         if (!v) return;
@@ -2632,6 +2660,7 @@ private:
     GSource *m_tabsSaveSrc = nullptr;               // pending debounced tabs write
     std::string m_curUrl, m_curTitle;               // current committed page (for history + bookmark)
     bool m_tlsProbed = false;                       // probeLibbyTls ran this session
+    double m_dragX = 0, m_dragY = 0;                // last pointerDrag position (view coords, worker thread)
     bool m_chromeShown = true;                      // toolbar visible (mirrors WpeView; worker thread)
     WebKitUserStyleSheet *m_insetSheet = nullptr;   // Libby-mode top inset sheet (we hold a ref)
     double m_insetZoom = 0;                         // zoom the inset sheet was computed for
@@ -3901,6 +3930,7 @@ Q_SIGNALS:
     void tap(int x, int y);  // tap at panel px -> the C++ tap router in main() (chrome / zones / content probe)
     void longPress(int x, int y);  // stationary hold (> tapMaxDwellMs) -> link peek
     void hswipe(int dir);    // sideways swipe (+1 = finger left = next / -1 = previous) — paginated readers only
+    void penDrag(int phase, int x, int y);   // AppLoad window: pen drag as a real mouse drag (0 start, 1 move, 2 end)
 public Q_SLOTS:
     void run() {
         blockSigterm(true);   // TERM belongs to the GUI thread between presents, not here
@@ -3972,18 +4002,26 @@ public Q_SLOTS:
     }
 private:
     // AppLoad window: touches and pen strokes arrive as messages on the qtfb socket, in framebuffer
-    // pixels. Follow one contact from press to release and hand it to the same gesture classifier.
-    // The pen counts as a finger (tap, swipe, long-press); while it is down, finger contacts are
-    // ignored, so a palm resting on the glass cannot turn the page mid-stroke.
+    // pixels. Finger: followed from press to release and classified like evdev touches (tap, swipe,
+    // long-press). Pen: a tap or a still hold is classified the same way, but once the tip moves it
+    // becomes a real mouse drag in the page (penDrag) — that is how text gets selected for Libby's
+    // highlights, so the pen marks and the finger turns pages. While the pen is down, fingers are
+    // ignored (a resting palm). Contacts that start on the top edge belong to AppLoad's window-bar
+    // gesture and are ignored entirely.
     void runQtfb() {
-        struct Contact { bool down = false; int id = -1, x0 = 0, y0 = 0, lx = 0, ly = 0; gint64 downUs = 0; };
+        struct Contact { bool down = false, dragging = false; int id = -1, x0 = 0, y0 = 0, lx = 0, ly = 0;
+                         gint64 downUs = 0, lastMoveUs = 0; };
         Contact finger, pen;
         int seenTouch = 0, seenPen = 0;
+        const int kTopEdge = 30;      // px: AppLoad's own "drag down from the top" lives here
+        const int kDragStart = 14;    // px of pen travel before a press becomes a drag
         qInfo("[touch] reading input from the AppLoad window (finger + pen)");
         auto finish = [this](Contact &c) {
             c.down = false; c.id = -1;
             emitGesture(c.lx - c.x0, c.ly - c.y0, qBound(0, c.lx, kPanelW - 1), qBound(0, c.ly, kPanelH - 1), c.downUs);
         };
+        auto clampX = [](int v) { return qBound(0, v, kPanelW - 1); };
+        auto clampY = [](int v) { return qBound(0, v, kPanelH - 1); };
         while (!m_stop.load()) {
             struct pollfd pfd = { g_qtfb->sock, POLLIN, 0 };
             if (poll(&pfd, 1, 500) <= 0) continue;
@@ -3999,21 +4037,35 @@ private:
             const bool isPen = in.inputType >= kQtfbPenPress && in.inputType <= kQtfbPenUpdate;
             int &seen = isPen ? seenPen : seenTouch;
             if (seen < 6) { ++seen; qInfo("[qtfb] input type=0x%x dev=%d x=%d y=%d d=%d", in.inputType, in.devId, in.x, in.y, in.d); }
+            const gint64 now = g_get_monotonic_time();
             if (isPen) {
                 if (in.inputType == kQtfbPenPress && !pen.down) {
+                    if (in.y < kTopEdge) continue;
                     if (finger.down) { finger.down = false; finger.id = -1; }   // pen wins: drop a resting palm
-                    pen.down = true; pen.x0 = pen.lx = in.x; pen.y0 = pen.ly = in.y; pen.downUs = g_get_monotonic_time();
+                    pen = Contact{}; pen.down = true;
+                    pen.x0 = pen.lx = in.x; pen.y0 = pen.ly = in.y; pen.downUs = now;
                 } else if (in.inputType == kQtfbPenUpdate && pen.down) {      // hover updates (pen up) are ignored
                     pen.lx = in.x; pen.ly = in.y;
+                    if (!pen.dragging && (abs(pen.lx - pen.x0) > kDragStart || abs(pen.ly - pen.y0) > kDragStart)) {
+                        pen.dragging = true;
+                        g_lastActivityUs.store(now, std::memory_order_release);
+                        Q_EMIT penDrag(0, clampX(pen.x0), clampY(pen.y0));
+                    }
+                    if (pen.dragging && now - pen.lastMoveUs >= 30000) {       // ~30 moves/s is plenty
+                        pen.lastMoveUs = now;
+                        Q_EMIT penDrag(1, clampX(pen.lx), clampY(pen.ly));
+                    }
                 } else if (in.inputType == kQtfbPenRelease && pen.down) {
-                    finish(pen);
+                    if (pen.dragging) { pen.down = false; Q_EMIT penDrag(2, clampX(pen.lx), clampY(pen.ly)); }
+                    else finish(pen);   // a pen tap or a still hold: same as a finger
                 }
                 continue;
             }
             if (pen.down) continue;                                          // palm rejection while writing
             if (in.inputType == kQtfbTouchPress && !finger.down) {
-                finger.down = true; finger.id = in.devId; finger.x0 = finger.lx = in.x; finger.y0 = finger.ly = in.y;
-                finger.downUs = g_get_monotonic_time();
+                if (in.y < kTopEdge) continue;                               // AppLoad's window-bar gesture
+                finger = Contact{}; finger.down = true; finger.id = in.devId;
+                finger.x0 = finger.lx = in.x; finger.y0 = finger.ly = in.y; finger.downUs = now;
             } else if (in.inputType == kQtfbTouchUpdate && finger.down && in.devId == finger.id) {
                 finger.lx = in.x; finger.ly = in.y;
             } else if (in.inputType == kQtfbTouchRelease && finger.down && in.devId == finger.id) {
@@ -4465,6 +4517,10 @@ int main(int argc, char **argv) {
         QObject::connect(&touchReader, &TouchReader::swipe, &app, [&engine, view](int dir) {
             view->forceNextContent();   // page-turn frame must paint immediately (bypass SPA throttle)
             if (dir > 0) engine.pageNext(); else engine.pagePrev();
+        });
+        QObject::connect(&touchReader, &TouchReader::penDrag, &app, [&engine, view](int phase, int x, int y) {
+            if (phase != 1) view->forceNextContent();   // the selection must paint promptly
+            engine.pointerDrag(phase, x, y);
         });
         QObject::connect(&touchReader, &TouchReader::hswipe, &app, [&engine, view](int dir) {
             view->forceNextContent();
