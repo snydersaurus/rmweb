@@ -4003,9 +4003,8 @@ public Q_SLOTS:
 private:
     // AppLoad window: touches and pen strokes arrive as messages on the qtfb socket, in framebuffer
     // pixels. Finger: followed from press to release and classified like evdev touches (tap, swipe,
-    // long-press). Pen: a tap or a still hold is classified the same way, but once the tip moves it
-    // becomes a real mouse drag in the page (penDrag) — that is how text gets selected for Libby's
-    // highlights, so the pen marks and the finger turns pages. While the pen is down, fingers are
+    // long-press). Pen: a real mouse in the page (penDrag) — press, hold on a word, drag to select
+    // for Libby's highlights; the finger turns pages and summons the toolbar. While the pen is down, fingers are
     // ignored (a resting palm). Contacts that start on the top edge belong to AppLoad's window-bar
     // gesture and are ignored entirely.
     void runQtfb() {
@@ -4039,25 +4038,28 @@ private:
             if (seen < 6) { ++seen; qInfo("[qtfb] input type=0x%x dev=%d x=%d y=%d d=%d", in.inputType, in.devId, in.x, in.y, in.d); }
             const gint64 now = g_get_monotonic_time();
             if (isPen) {
+                // The pen is a mouse in the page: the button goes down the moment the tip touches,
+                // so pressing and holding on a word is a real hold (Libby selects the word), and a
+                // drag after that extends the selection. A quick drag is still a page swipe to Libby.
+                // The GUI side sends taps on our toolbar to the toolbar instead (penDrag handler).
                 if (in.inputType == kQtfbPenPress && !pen.down) {
                     if (in.y < kTopEdge) continue;
                     if (finger.down) { finger.down = false; finger.id = -1; }   // pen wins: drop a resting palm
                     pen = Contact{}; pen.down = true;
                     pen.x0 = pen.lx = in.x; pen.y0 = pen.ly = in.y; pen.downUs = now;
+                    g_lastActivityUs.store(now, std::memory_order_release);
+                    Q_EMIT penDrag(0, clampX(pen.x0), clampY(pen.y0));
                 } else if (in.inputType == kQtfbPenUpdate && pen.down) {      // hover updates (pen up) are ignored
                     pen.lx = in.x; pen.ly = in.y;
-                    if (!pen.dragging && (abs(pen.lx - pen.x0) > kDragStart || abs(pen.ly - pen.y0) > kDragStart)) {
-                        pen.dragging = true;
-                        g_lastActivityUs.store(now, std::memory_order_release);
-                        Q_EMIT penDrag(0, clampX(pen.x0), clampY(pen.y0));
-                    }
-                    if (pen.dragging && now - pen.lastMoveUs >= 30000) {       // ~30 moves/s is plenty
+                    if (!pen.dragging && (abs(pen.lx - pen.x0) > kDragStart || abs(pen.ly - pen.y0) > kDragStart))
+                        pen.dragging = true;                                // below that: tip jitter, not a move
+                    if (pen.dragging && now - pen.lastMoveUs >= 30000) {    // ~30 moves/s is plenty
                         pen.lastMoveUs = now;
                         Q_EMIT penDrag(1, clampX(pen.lx), clampY(pen.ly));
                     }
                 } else if (in.inputType == kQtfbPenRelease && pen.down) {
-                    if (pen.dragging) { pen.down = false; Q_EMIT penDrag(2, clampX(pen.lx), clampY(pen.ly)); }
-                    else finish(pen);   // a pen tap or a still hold: same as a finger
+                    pen.down = false;
+                    Q_EMIT penDrag(2, clampX(pen.dragging ? pen.lx : pen.x0), clampY(pen.dragging ? pen.ly : pen.y0));
                 }
                 continue;
             }
@@ -4518,7 +4520,11 @@ int main(int argc, char **argv) {
             view->forceNextContent();   // page-turn frame must paint immediately (bypass SPA throttle)
             if (dir > 0) engine.pageNext(); else engine.pagePrev();
         });
-        QObject::connect(&touchReader, &TouchReader::penDrag, &app, [&engine, view](int phase, int x, int y) {
+        QObject::connect(&touchReader, &TouchReader::penDrag, &app,
+            [&engine, view, &touchReader, onBar = false](int phase, int x, int y) mutable {
+            // A pen press on our visible toolbar is a toolbar tap, not a mouse press in the page.
+            if (phase == 0) onBar = view->hitChrome(x, y) != WpeView::None;
+            if (onBar) { if (phase == 2) Q_EMIT touchReader.tap(x, y); return; }
             if (phase != 1) view->forceNextContent();   // the selection must paint promptly
             engine.pointerDrag(phase, x, y);
         });
