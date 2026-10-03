@@ -37,4 +37,6 @@ docker run --rm --platform linux/amd64 \
   sh -c "apk add -q bash openssl >/dev/null 2>&1; '$B/vbuild-x86_64-musl' all 2>&1 | grep -v 'listxattr'"
 cp "$WORK"/dist/aarch64/*.apk dist/vellum/
 cp "$B/home/.config/vbuild/$KEY.rsa.pub" dist/vellum/
+cmp -s "$B/home/.config/vbuild/$KEY.rsa.pub" "packaging/vellum/$KEY.rsa.pub" \
+  || echo "NOTE: packaging/vellum/$KEY.rsa.pub differs from the signing key - commit the new one"
 ls -l dist/vellum

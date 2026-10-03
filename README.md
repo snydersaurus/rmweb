@@ -28,6 +28,8 @@ XOVI/AppLoad for the launcher icon, and a library card.
   after typing into a search box.
 - **A reading toolbar** in place of the browser bar: Shelf, B&W/Colour, Font, A-, A+, Refresh, close.
 - **Book font choice**, cycling the typefaces installed on the tablet.
+- **Typed notes** into Libby's note box with the on-screen keyboard.
+- **Swipes that start on the bezel** still turn the page.
 - **Sleep and wake** with the power button while a book is open, plus sleep after 15 idle minutes.
 - **Reading on after the connection drops.** Libby's reader loads the whole book when it opens, so
   an open book keeps paging offline and across sleep. Closing rmweb drops it.
