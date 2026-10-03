@@ -12,6 +12,8 @@ All in `engine/wpeqt/main.cpp` unless noted.
 | Area | Change |
 |---|---|
 | Page turns | On `libbyapp.com/open/...` swipes (now also horizontal, `gesture.h`) and edge taps send a real Left/Right key through `wpe_view_event`. Libby's reader lives in a cross-origin frame and ignores rmweb's scroll JS. |
+| Swipe distances | Scaled to the panel (`gestureParamsFor`: 13% of the width sideways, 11% of the height vertically), and a quick one-way flick counts even when short, so swipes that start on the bezel turn the page. Every non-tap contact is logged as `[gesture]`. |
+| Typed notes | Text fields inside Libby's reader frame (the note box) report focus through a small child-frame script; our keyboard opens on the field and Go types the text as real key presses after a select-all. |
 | Taps | A tap the JS probe can't resolve is replayed as a real pointer click, so Libby's overlay and in-book controls respond. |
 | List scrolling | On other Libby pages a swipe sends a real precise wheel event; the lazy result lists stay blank under the scroll/untrap JS. |
 | Search | Go in a search-style field is followed by a real Return key. |
@@ -106,4 +108,6 @@ shared with a plain rmweb install if one exists, so a Libby sign-in carries over
   unproven.
 - Changing the font with a book open may leave Libby's page breaks slightly off until the book is
   reopened.
-- Drags are not passed through, so Libby's text selection (highlights, notes) does not work yet.
+- Drags are not passed through in this full-screen app, so you cannot make new highlights here.
+  You can add notes to highlights made elsewhere: tap the highlight, then Make a note. Pen
+  highlighting works in the AppLoad-window experiment (branch `appload-window`).

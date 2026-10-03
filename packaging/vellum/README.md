@@ -12,8 +12,9 @@ available packages. It is installed from a file; once installed, reManager shows
 ## Install the prebuilt package
 
 Each [release](https://github.com/snydersaurus/rmweb/releases) carries
-`libby-reader-<version>-r0.apk` and the public half of the key it is signed with. Download the
-`.apk` first.
+`libby-reader-<version>-r0.apk`. Download it first. The public half of the key the packages are
+signed with is kept in this folder, [snydersaurus.rsa.pub](snydersaurus.rsa.pub), not on the
+release page, so it does not travel with the file it verifies.
 
 ### With the reManager desktop app
 
@@ -49,7 +50,8 @@ ssh root@10.11.99.1 '/home/root/.vellum/bin/vellum add --allow-untrusted /home/r
 ### About `--allow-untrusted`
 
 It installs the package without checking its signature. To have Vellum verify it instead, first
-copy `snydersaurus.rsa.pub` to `/home/root/.vellum/etc/apk/keys/` on the tablet and drop the flag.
+copy [snydersaurus.rsa.pub](snydersaurus.rsa.pub) from this folder to
+`/home/root/.vellum/etc/apk/keys/` on the tablet and drop the flag.
 That makes Vellum trust anything signed with that key, so only do it if you trust this fork.
 
 The package depends on `launcher`, so Vellum pulls in XOVI and AppLoad if they are missing.
