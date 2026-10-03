@@ -14,6 +14,13 @@ REL="${1:-build/src/rmweb-0.9.7.tar.gz}"
 VER="$(cat LIBBY_VERSION)"
 [ -f "$REL" ] || { echo "release tarball not found: $REL" >&2; exit 1; }
 [ -f build/rmweb-wpeqt ] || { echo "build/rmweb-wpeqt missing - run scripts/build-wpeqt.sh" >&2; exit 1; }
+# The binary must come from this checkout's engine code (a build from another branch, or a failed
+# build that left an older binary behind, would otherwise be packaged silently).
+BUILT="$(sed -n 1p build/rmweb-wpeqt.commit 2>/dev/null || true)"
+if [ -z "$BUILT" ] || grep -q dirty build/rmweb-wpeqt.commit || ! git diff --quiet "$BUILT" HEAD -- engine \
+   || ! git diff --quiet -- engine; then
+  echo "build/rmweb-wpeqt was not built from this checkout's engine code - run scripts/build-wpeqt.sh" >&2; exit 1
+fi
 
 OUT=dist/libby
 rm -rf dist/libby "dist/libby-$VER.tar.gz"

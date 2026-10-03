@@ -59,14 +59,14 @@ You need developer mode on the tablet and the
 4. **Utilities** tab, **Terminal**: install it (use the file name you downloaded).
 
    ```sh
-   /home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.2.0-r0.apk
+   /home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.2.1-r0.apk
    ```
 
 5. In the same terminal, delete the uploaded file and restart the reMarkable interface so AppLoad
    notices the new app:
 
    ```sh
-   rm /home/root/libby-reader-0.2.0-r0.apk
+   rm /home/root/libby-reader-0.2.1-r0.apk
    /home/root/xovi/start
    ```
 

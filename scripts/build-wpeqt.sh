@@ -16,3 +16,7 @@ docker run --rm -v "$PWD":/work -w /work rmweb-sdk bash -lc '
   cp -f /work/build/wpeqt/rmweb-wpeqt /work/build/rmweb-wpeqt
   echo "[wpeqt] built:"; ls -l /work/build/rmweb-wpeqt
 '
+# Record which source the binary came from: package-libby.sh refuses a binary built from other code.
+git rev-parse HEAD > build/rmweb-wpeqt.commit
+git diff --quiet -- engine || echo dirty >> build/rmweb-wpeqt.commit
+

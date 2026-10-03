@@ -24,7 +24,7 @@ release page, so it does not travel with the file it verifies.
 3. **Utilities** tab, **Terminal**: install it.
 
    ```sh
-   /home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.2.0-r0.apk
+   /home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.2.1-r0.apk
    ```
 
    It ends with a line starting `OK:`.
@@ -32,7 +32,7 @@ release page, so it does not travel with the file it verifies.
    app, and delete the uploaded file:
 
    ```sh
-   rm /home/root/libby-reader-0.2.0-r0.apk
+   rm /home/root/libby-reader-0.2.1-r0.apk
    /home/root/xovi/start
    ```
 
@@ -42,9 +42,9 @@ release page, so it does not travel with the file it verifies.
 ### From a terminal on your computer
 
 ```sh
-scp libby-reader-0.2.0-r0.apk root@10.11.99.1:/home/root/
-ssh root@10.11.99.1 '/home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.2.0-r0.apk \
-  && rm /home/root/libby-reader-0.2.0-r0.apk && /home/root/xovi/start'
+scp libby-reader-0.2.1-r0.apk root@10.11.99.1:/home/root/
+ssh root@10.11.99.1 '/home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.2.1-r0.apk \
+  && rm /home/root/libby-reader-0.2.1-r0.apk && /home/root/xovi/start'
 ```
 
 ### About `--allow-untrusted`
