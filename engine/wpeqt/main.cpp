@@ -4099,7 +4099,12 @@ private:
         g_lastActivityUs.store(now, std::memory_order_release);
         const int dwellMs = static_cast<int>((now - downUs) / 1000);
         const bool editing = g_urlEditing.load(std::memory_order_acquire);
-        switch (classifyGesture(dx, dy, dwellMs)) {
+        static const rmweb::GestureParams params = rmweb::gestureParamsFor(kPanelW, kPanelH);
+        const Gesture g = classifyGesture(dx, dy, dwellMs, params);
+        // One line per finished contact: what it travelled and what it became (swipe tuning).
+        static const char *const kNames[] = { "none", "swipe-up", "swipe-down", "swipe-left", "swipe-right", "tap", "long-press" };
+        if (g != Gesture::Tap) qInfo("[gesture] dx=%d dy=%d %dms -> %s", dx, dy, dwellMs, kNames[int(g)]);
+        switch (g) {
         case Gesture::Tap: {
             // Keyboard: short debounce. Normal UI: 250 ms anti-double-tap.
             const gint64 tapDebounceUs = editing ? 40000 : 250000;
