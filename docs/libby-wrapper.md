@@ -17,13 +17,15 @@ All in `engine/wpeqt/main.cpp` unless noted.
 | Taps | A tap the JS probe can't resolve is replayed as a real pointer click, so Libby's overlay and in-book controls respond. |
 | List scrolling | On other Libby pages a swipe sends a real precise wheel event; the lazy result lists stay blank under the scroll/untrap JS. |
 | Search | Go in a search-style field is followed by a real Return key. |
-| Libby mode | `RMWEB_LIBBY=1`: toolbar is Shelf, B&W/Colour, Font, A-, A+, Refresh, X. The page is inset below the bar (not inside a book). Long-press summons the bar inside a book. |
+| AppLoad window | With `QTFB_KEY` set (AppLoad, manifest `"qtfb": true`) the view paints into AppLoad's shared framebuffer and reads finger and pen input from its socket; no Qt window, xochitl keeps running, the sleep watcher is off. B&W fast mode maps to qtfb's fast refresh mode with a full refresh every `RMWEB_FULL_EVERY` content presents. Contacts starting in the top 30 px are left to AppLoad's window bar. |
+| Pen | In window mode the pen is a real mouse in the page: the button goes down when the tip touches, so a still hold selects a word in Libby and a drag extends the selection (a quick drag is Libby's page swipe). Fingers are ignored while the pen is down. |
+| Libby mode | `RMWEB_LIBBY=1`: toolbar is Shelf, B&W/Colour, Font, A-, A+, Refresh (plus X when full-screen). The page is inset below the bar (not inside a book). Long-press summons the bar inside a book. |
 | Book font | Font button cycles `kBookFonts`; saved in `<profile>/bookfont.txt`. |
 | User files | Optional `<profile>/user.css` and `<profile>/user.js` (all frames). `user.js` can log with `window.webkit.messageHandlers.rmweb.postMessage(...)`. |
-| Sleep | Power button or 15 idle minutes (`RMWEB_IDLE_SLEEP_MIN`, 0 = never) suspends to RAM; the open book survives, so reading continues offline after wake. |
+| Sleep | Window mode: the reMarkable interface handles sleep. Full-screen mode: power button or 15 idle minutes (`RMWEB_IDLE_SLEEP_MIN`, 0 = never) suspends to RAM. Either way the open book survives, so reading continues offline after wake. |
 | Loan guard | Reads the open title's `expireTime` from Libby's `localStorage` and leaves the reader once the loan has ended. |
-| TLS option page | When Libby's API hosts refuse the handshake, an in-app page explains the opt-in TLS option; a tap turns it on and the launcher restarts the app (exit code 75). |
-| Launcher | `device/libby-entry.sh` + `device/appload/libby/` = a "Libby" AppLoad icon. |
+| TLS option page | When Libby's API hosts refuse the handshake, an in-app page explains the opt-in TLS option. A tap turns it on; in window mode the app sets `OPENSSL_CONF`, ends WebKit's network process (SIGKILL) and reloads, in full-screen mode the launcher restarts the app (exit code 75). |
+| Launchers | The icon runs `device/libby-window/libby-window.sh` (AppLoad window, manifest `device/appload/libby/`). `device/libby-entry.sh` is the full-screen launcher, kept for SSH use and as a fallback. |
 
 ## Building without rebuilding WebKit
 
@@ -53,7 +55,7 @@ is in `LIBBY_VERSION`.
 Install without this repo: unpack the release tarball into AppLoad's folder on the tablet.
 
 ```sh
-ssh root@10.11.99.1 'tar -C /home/root/xovi/exthome/appload -xzf -' < libby-0.1.0.tar.gz
+ssh root@10.11.99.1 'tar -C /home/root/xovi/exthome/appload -xzf -' < libby-0.3.0.tar.gz
 ```
 
 Then restart xochitl through XOVI (or reboot and re-enable XOVI) so AppLoad sees the new icon.
@@ -74,12 +76,14 @@ shared with a plain rmweb install if one exists, so a Libby sign-in carries over
 
 ## Using it
 
-- Launch from the **Libby** icon in AppLoad. Over SSH:
+- Launch from the **Libby** icon in AppLoad; it opens as an AppLoad window. The window version
+  can only be started by AppLoad (it allocates the framebuffer). The full-screen version can be
+  started over SSH:
   `systemd-run --unit=rmweb-test --collect /home/root/xovi/exthome/appload/libby/libby-entry.sh`
 - In a book: tap the middle to toggle Libby's controls; swipe or tap an edge to turn pages (only
-  with Libby's overlay dismissed); long-press for the toolbar.
-- Quit with the X. Quitting restarts xochitl, which asks for the passcode, and drops the book
-  from memory.
+  with Libby's overlay dismissed); long-press for the toolbar; pen hold-and-drag to highlight.
+- Leave with AppLoad's window bar (drag down from the top centre): `_` minimises, `X` closes.
+  Closing drops the book from memory; minimising keeps it.
 - Logs: `rmweb.log` in the app folder.
 
 ## Diagnostics
@@ -97,17 +101,17 @@ shared with a plain rmweb install if one exists, so a Libby sign-in carries over
 
 ## Known gaps
 
-- The packaged app has been through a from-scratch install by hand (2026-10-02): package
-  installed with reManager, launched from the AppLoad icon, TLS page tapped, app restarted
-  itself, Libby signed in by setup code.
-- Sleep/wake by power button is confirmed (2026-10-02: suspended on the second attempt, woke on
-  the power button after 63 s). The panel regulator refuses suspend while its `vpdd` timer runs
-  after a screen update, so the watcher polls `vpdd_timeout_ms` and retries; expect a few seconds
-  to about half a minute between the press and the actual sleep. Idle sleep is unconfirmed.
+- Confirmed by hand on the Move: a from-scratch install with reManager (2026-10-02, full-screen);
+  in window mode (2026-10-04) the TLS page and in-place reconnect, pen highlights, typed notes,
+  bezel swipes, and minimising to a notebook and back with the book still open.
+- Full-screen mode's own sleep watcher is confirmed (2026-10-02). The panel regulator refuses
+  suspend while its `vpdd` timer runs after a screen update, so it polls `vpdd_timeout_ms` and
+  retries. Window mode leaves sleep to the reMarkable interface.
 - Offline reading was verified on one 82-page book (84 page turns with wifi off); long books are
   unproven.
 - Changing the font with a book open may leave Libby's page breaks slightly off until the book is
   reopened.
-- Drags are not passed through in this full-screen app, so you cannot make new highlights here.
-  You can add notes to highlights made elsewhere: tap the highlight, then Make a note. Pen
-  highlighting works in the AppLoad-window experiment (branch `appload-window`).
+- Pen input and pen highlighting exist only in window mode; the full-screen launcher reads
+  fingers only.
+- AppLoad has no dock: a minimised window is a small bar left on screen, and tapping the icon of a
+  running app does not bring it back.

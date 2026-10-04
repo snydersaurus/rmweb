@@ -113,7 +113,7 @@ static const int kBookFontCount = int(sizeof kBookFonts / sizeof kBookFonts[0]);
 // block of position:fixed descendants, so they shift down with it instead of staying under the bar.
 static const char *kLibbyInsetCss =
     "html{transform:translateY(%.2fpx)!important;height:calc(100%% - %.2fpx)!important;overflow:hidden!important}";
-// --- EXPERIMENT (branch appload-window): run as an AppLoad window instead of taking the screen --
+// --- AppLoad window mode: run as an AppLoad window instead of taking the screen --
 // AppLoad's "qtfb" gives an external app a shared-memory framebuffer shown in a window inside the
 // running reMarkable UI, and sends that window's touch input back over a unix socket. With
 // QTFB_KEY in the environment (AppLoad sets it for manifests with "qtfb": true) we connect to it:

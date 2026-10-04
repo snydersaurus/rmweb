@@ -52,8 +52,10 @@ is the trade-off; it is why no script in this repo installs it for you.
 
 **From the app (packaged Libby app, 0.2.0 and later).** In Libby mode the app tries one of the
 hosts above once per run. If the handshake is what fails, it shows a page that explains the
-option, with "Turn it on and restart" and "Not now". Only a real tap on that page turns it on; the
-app then restarts itself with the option applied. Nothing is changed until that tap.
+option, with "Turn it on and restart" and "Not now". Only a real tap on that page turns it on.
+In window mode (0.3.0 and later) the app then restarts only WebKit's network process with the
+option applied and reloads the Shelf in the same window; in full-screen mode it restarts itself.
+Nothing is changed until that tap.
 
 **By hand.**
 

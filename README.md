@@ -17,22 +17,28 @@ XOVI/AppLoad for the launcher icon, and a library card.
   onto the tablet, or you can build it yourself in about a minute once Docker and the SDK image
   are set up. Either way, expect to use a terminal.
 - **The tweaks are small in kind.** rmweb drives pages with scripts; Libby's reader only answers
-  to real keys, clicks and scrolls. Most of the fork is passing those through, plus a toolbar,
-  sleep handling, and one opt-in TLS setting the tablet needs before Libby's servers will connect.
+  to real keys, clicks and scrolls. Most of the fork is passing those through, plus running as an
+  AppLoad window, a toolbar, and one opt-in TLS setting the tablet needs before Libby's servers
+  will connect.
 
 ## What the fork adds
 
+- **Runs as an AppLoad window** next to the normal reMarkable interface, which keeps running. No
+  passcode prompt when you leave, the tablet's own sleep and power button work as usual, and a
+  minimised Libby keeps your book open while you use your notebooks.
 - **Page turns and taps in Libby's reader.** Swipes and edge taps are sent as real arrow keys, and
   taps as real clicks, because the reader ignores rmweb's script-driven scrolling.
+- **Pen highlights.** Hold the pen on a word until it highlights, drag, lift, then tap Highlight.
+  Highlights and notes are Libby's own, so they sync to your other devices.
 - **Working lists and search.** Real scroll events for Libby's self-filling lists; Enter is sent
   after typing into a search box.
-- **A reading toolbar** in place of the browser bar: Shelf, B&W/Colour, Font, A-, A+, Refresh, close.
+- **A reading toolbar** in place of the browser bar: Shelf, B&W/Colour, Font, A-, A+, Refresh.
 - **Book font choice**, cycling the typefaces installed on the tablet.
-- **Typed notes** into Libby's note box with the on-screen keyboard.
+- **Typed notes** into Libby's note box with the on-screen keyboard (tap a highlight, then
+  Make a note).
 - **Swipes that start on the bezel** still turn the page.
-- **Sleep and wake** with the power button while a book is open, plus sleep after 15 idle minutes.
 - **Reading on after the connection drops.** Libby's reader loads the whole book when it opens, so
-  an open book keeps paging offline and across sleep. Closing rmweb drops it.
+  an open book keeps paging offline, across sleep and while minimised. Closing the app drops it.
 - **A build shortcut** that recompiles rmweb's own program in about a minute without building WebKit.
 
 ## What it deliberately does not do
@@ -59,14 +65,14 @@ You need developer mode on the tablet and the
 4. **Utilities** tab, **Terminal**: install it (use the file name you downloaded).
 
    ```sh
-   /home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.2.1-r0.apk
+   /home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.3.0-r0.apk
    ```
 
 5. In the same terminal, delete the uploaded file and restart the reMarkable interface so AppLoad
    notices the new app:
 
    ```sh
-   rm /home/root/libby-reader-0.2.1-r0.apk
+   rm /home/root/libby-reader-0.3.0-r0.apk
    /home/root/xovi/start
    ```
 
@@ -76,8 +82,13 @@ It is not in Vellum's official index, so it will not appear in reManager's list 
 packages; once installed it shows under Mods as `libby-reader`.
 
 **First launch.** The app shows a page about one TLS option Libby needs and turns it on only if
-you tap the button ([docs/tls.md](docs/tls.md) explains what it changes). Then Libby asks for your
-library card, or a setup code from the Libby app on your phone.
+you tap the button ([docs/tls.md](docs/tls.md) explains what it changes); Libby then reconnects in
+the same window. Then Libby asks for your library card, or a setup code from the Libby app on your
+phone.
+
+**Leaving and coming back.** Drag down from the top centre of the screen for AppLoad's window bar:
+`_` minimises Libby (tap `_` on the leftover bar to bring it back, book still open), `X` closes it.
+Do not reopen a running Libby from its icon; AppLoad would try to start a second copy.
 
 Other ways to install, signature checking and removal:
 [packaging/vellum/README.md](packaging/vellum/README.md). Building it yourself:
