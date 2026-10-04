@@ -1,6 +1,6 @@
 maintainer="Bill Snyder <wsnyder6@gmail.com>"
 pkgname=libby-reader
-pkgver=0.2.1
+pkgver=0.3.0
 pkgrel=0
 pkgdesc="Read Libby library loans in Libby's own web reader (a Libby-focused build of rmweb)"
 upstream_author="snydersaurus"
@@ -59,5 +59,5 @@ postdeinstall() {
 }
 
 sha512sums="
-154f7a70874b39d907d7502f005342d43ee11148b81c43517b941c59c32ae0bfe55a70a64fec521d882b784199fd056f47568e71ada5beca35ebce3caa3efd04  libby-0.2.1.tar.gz
+096ae0c1810c3c56e8e3df88319bc690ace2f67a130c03e877e1ef713ee76b7bffa6056803caa66bfd3b86bb6814e44e0fa0d597857b9a8f7e52d5ac70868eaa  libby-0.3.0.tar.gz
 "
