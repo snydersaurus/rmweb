@@ -1448,7 +1448,7 @@ public Q_SLOTS:
                 int ppid = 0;
                 if (open && close && close > open && sscanf(close + 2, "%*c %d", &ppid) == 1 && ppid == me
                         && std::string(open + 1, close).rfind("WPENetworkProc", 0) == 0) {
-                    kill(pid, SIGTERM);
+                    kill(pid, SIGKILL);   // WebKit's helper does not stop on SIGTERM (seen on the Move)
                     ++killed;
                 }
                 g_free(stat);
@@ -1456,13 +1456,32 @@ public Q_SLOTS:
             closedir(d);
         }
         qInfo("[tlsopt] ended %d network process(es); reloading", killed);
-        g_timeout_add_full(G_PRIORITY_DEFAULT, 1500, [](gpointer data) -> gboolean {
+        // On THIS thread's context (WebKit's): g_timeout_add would land on the global default
+        // context, which nothing here iterates.
+        GSource *t = g_timeout_source_new(1500);
+        g_source_set_callback(t, [](gpointer data) -> gboolean {
             auto *self = static_cast<WpeEngine*>(data);
             self->m_expectUserNav = true;
-            self->m_tlsProbed = false;   // probe again: confirms the fix, and re-asks if it did not work
+            int fresh = 0;   // did the replacement start with the config? (log it — the honest check)
+            if (DIR *d = opendir("/proc")) {
+                while (struct dirent *e = readdir(d)) {
+                    const std::string env = std::string("/proc/") + e->d_name + "/environ";
+                    gchar *buf = nullptr; gsize len = 0;
+                    if (atoi(e->d_name) <= 0 || !g_file_get_contents(env.c_str(), &buf, &len, nullptr)) continue;
+                    gchar *cmd = nullptr;
+                    if (g_file_get_contents((std::string("/proc/") + e->d_name + "/cmdline").c_str(), &cmd, nullptr, nullptr)
+                            && cmd && strstr(cmd, "WPENetworkProcess")
+                            && memmem(buf, len, "OPENSSL_CONF=", 13)) ++fresh;
+                    g_free(cmd); g_free(buf);
+                }
+                closedir(d);
+            }
+            qInfo("[tlsopt] reloading the Shelf (%d network process(es) running with the config)", fresh);
             if (self->m_view) webkit_web_view_load_uri(self->m_view, "https://libbyapp.com/shelf");
             return G_SOURCE_REMOVE;
         }, this, nullptr);
+        g_source_attach(t, m_ctx);
+        g_source_unref(t);
     }
     void showTlsPrompt() {   // worker thread
         if (!m_view) return;
