@@ -1,13 +1,17 @@
 #!/bin/sh
-# EXPERIMENT (branch appload-window): Libby as an AppLoad WINDOW. xochitl keeps running; AppLoad
-# gives us a shared framebuffer (QTFB_KEY) and the window's touch input. This folder holds only the
-# launcher, manifest, icon and the experimental rmweb-wpeqt; libraries, helpers and settings come
-# from the installed Libby app (the libby-reader package), which is left untouched.
+# Libby as an AppLoad WINDOW. xochitl keeps running; AppLoad gives us a shared framebuffer
+# (QTFB_KEY) and the window's touch and pen input; sleep and the power button stay xochitl's.
+# Two layouts: the packaged app (this folder IS the bundle: bin/, lib/, libexec/), or a bare
+# experiment folder next to an installed Libby app, borrowing that app's bundle.
 set -u
 W="$(cd "$(dirname "$0")" && pwd)"
-R=/home/root/xovi/exthome/appload/libby
+if [ -x "$W/bin/rmweb-wpeqt" ]; then
+  R="$W"; BIN="$W/bin/rmweb-wpeqt"
+else
+  R=/home/root/xovi/exthome/appload/libby; BIN="$W/rmweb-wpeqt"
+fi
 LOG="$W/rmweb.log"
-[ -x "$R/rmweb" ] || { echo "[window] the Libby app is not installed at $R" >> "$LOG"; exit 1; }
+[ -x "$R/rmweb-env.sh" ] || [ -f "$R/rmweb-env.sh" ] || { echo "[window] no rmweb bundle at $R" >> "$LOG"; exit 1; }
 pgrep rmweb-wpeqt >/dev/null 2>&1 && { echo "[window] rmweb is already running" >> "$LOG"; exit 1; }
 export RMWEB_ROOT="$R" RMWEB_LIBBY=1
 echo "[window] start (QTFB_KEY=${QTFB_KEY:-unset})" >> "$LOG"
@@ -23,4 +27,4 @@ fi
 . "$R/rmweb-env.sh"
 # No panel of our own: Qt is only used for painting into the window's framebuffer.
 export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software
-exec "$W/rmweb-wpeqt" "https://libbyapp.com/shelf" >> "$LOG" 2>&1
+exec "$BIN" "https://libbyapp.com/shelf" >> "$LOG" 2>&1

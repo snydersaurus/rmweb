@@ -31,7 +31,8 @@ rm -rf "$OUT/install.sh" "$OUT/appload" "$OUT/appload-entry.sh" "$OUT/icon.svg"
 find "$OUT" -name '._*' -delete          # AppleDouble files that ride along in upstream's tarball
 
 install -m 755 build/rmweb-wpeqt        "$OUT/bin/rmweb-wpeqt"
-install -m 755 device/libby-entry.sh    "$OUT/libby-entry.sh"
+install -m 755 device/libby-entry.sh    "$OUT/libby-entry.sh"            # full-screen launcher (SSH / fallback)
+install -m 755 device/libby-window/libby-window.sh "$OUT/libby-window.sh"   # AppLoad window launcher (the icon)
 install -m 755 device/rmweb             "$OUT/rmweb"            # this fork's launcher (restart on exit 75)
 install -m 644 device/rmweb-env.sh      "$OUT/rmweb-env.sh"     # ... and env (opt-in TLS marker)
 install -m 644 device/openssl-rmweb.cnf "$OUT/openssl-rmweb.cnf"

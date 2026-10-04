@@ -658,9 +658,18 @@ public Q_SLOTS:
                     } else if (!expectUserNav) {
                         qWarning("[tlsopt] enable rejected: not a tap");
                     } else if (g_file_set_contents(tlsMarkerPath().c_str(), "", 0, nullptr)) {
-                        qInfo("[tlsopt] enabled by the user (%s) — restarting", tlsMarkerPath().c_str());
-                        Q_EMIT self->notice(QStringLiteral("Turned on \u2014 restarting"));
-                        Q_EMIT self->restartRequested();
+                        if (g_qtfb) {
+                            // As an AppLoad window the app cannot restart itself: AppLoad closes the
+                            // window when the process ends. Only WebKit's network process does TLS, so
+                            // point OpenSSL at the config and replace that one process instead.
+                            qInfo("[tlsopt] enabled by the user (%s) — restarting the network process", tlsMarkerPath().c_str());
+                            Q_EMIT self->notice(QStringLiteral("Turned on \u2014 reconnecting"));
+                            self->applyTlsInPlace();
+                        } else {
+                            qInfo("[tlsopt] enabled by the user (%s) — restarting", tlsMarkerPath().c_str());
+                            Q_EMIT self->notice(QStringLiteral("Turned on \u2014 restarting"));
+                            Q_EMIT self->restartRequested();
+                        }
                     } else {
                         qWarning("[tlsopt] could not write %s", tlsMarkerPath().c_str());
                         Q_EMIT self->notice(QStringLiteral("Could not save the setting"));
@@ -1418,6 +1427,42 @@ public Q_SLOTS:
                 g_clear_error(&err);
                 if (tls) static_cast<WpeEngine*>(data)->showTlsPrompt();
             }, this);
+    }
+    // Window mode's "restart": WebKit spawns WPENetworkProcess with the UI process's environment
+    // and launches a new one on demand after the old one dies. Set OPENSSL_CONF here, end the
+    // running network process, and reload: the page comes back through a network process that
+    // reads the TLS config at startup.
+    void applyTlsInPlace() {   // worker thread
+        setenv("OPENSSL_CONF", (rmwebRoot() + "/openssl-rmweb.cnf").c_str(), 1);
+        int killed = 0;
+        const pid_t me = getpid();
+        if (DIR *d = opendir("/proc")) {
+            while (struct dirent *e = readdir(d)) {
+                const pid_t pid = pid_t(atoi(e->d_name));
+                if (pid <= 0) continue;
+                gchar *stat = nullptr;
+                const std::string path = std::string("/proc/") + e->d_name + "/stat";
+                if (!g_file_get_contents(path.c_str(), &stat, nullptr, nullptr) || !stat) continue;
+                // "pid (comm) state ppid ...": comm may contain spaces, so parse from the last ')'.
+                const char *open = strchr(stat, '('), *close = strrchr(stat, ')');
+                int ppid = 0;
+                if (open && close && close > open && sscanf(close + 2, "%*c %d", &ppid) == 1 && ppid == me
+                        && std::string(open + 1, close).rfind("WPENetworkProc", 0) == 0) {
+                    kill(pid, SIGTERM);
+                    ++killed;
+                }
+                g_free(stat);
+            }
+            closedir(d);
+        }
+        qInfo("[tlsopt] ended %d network process(es); reloading", killed);
+        g_timeout_add_full(G_PRIORITY_DEFAULT, 1500, [](gpointer data) -> gboolean {
+            auto *self = static_cast<WpeEngine*>(data);
+            self->m_expectUserNav = true;
+            self->m_tlsProbed = false;   // probe again: confirms the fix, and re-asks if it did not work
+            if (self->m_view) webkit_web_view_load_uri(self->m_view, "https://libbyapp.com/shelf");
+            return G_SOURCE_REMOVE;
+        }, this, nullptr);
     }
     void showTlsPrompt() {   // worker thread
         if (!m_view) return;
