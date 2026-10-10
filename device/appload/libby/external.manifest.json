@@ -3,7 +3,7 @@
   "application": "/home/root/xovi/exthome/appload/libby/libby-window.sh",
   "workingDirectory": "/home/root/xovi/exthome/appload/libby",
   "qtfb": true,
-  "aspectRatio": "move",
+  "aspectRatio": "auto",
   "disablesWindowedMode": false,
   "id": "libby",
   "version": "0.1.0",

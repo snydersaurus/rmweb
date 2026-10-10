@@ -55,7 +55,7 @@ is in `LIBBY_VERSION`.
 Install without this repo: unpack the release tarball into AppLoad's folder on the tablet.
 
 ```sh
-ssh root@10.11.99.1 'tar -C /home/root/xovi/exthome/appload -xzf -' < libby-0.3.0.tar.gz
+ssh root@10.11.99.1 'tar -C /home/root/xovi/exthome/appload -xzf -' < libby-0.3.1.tar.gz
 ```
 
 Then restart xochitl through XOVI (or reboot and re-enable XOVI) so AppLoad sees the new icon.

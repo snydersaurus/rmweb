@@ -3,7 +3,8 @@
 This is a personal fork of [exp78/rmweb](https://github.com/exp78/rmweb) (v0.9.7), a WPE WebKit
 browser for reMarkable e-ink tablets. The fork makes Libby's web reader (libbyapp.com) usable on a
 **reMarkable Paper Pro Move**, so library loans can be read on the tablet through Libby's own
-reader.
+reader. The same package should also work on the **Paper Pro**, but nobody has tried it there yet:
+if you do, please [open an issue](https://github.com/snydersaurus/rmweb/issues) saying how it went.
 
 It is unofficial and not affiliated with OverDrive, Libby or reMarkable. It needs developer mode,
 XOVI/AppLoad for the launcher icon, and a library card.
@@ -65,14 +66,14 @@ You need developer mode on the tablet and the
 4. **Utilities** tab, **Terminal**: install it (use the file name you downloaded).
 
    ```sh
-   /home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.3.0-r0.apk
+   /home/root/.vellum/bin/vellum add --allow-untrusted /home/root/libby-reader-0.3.1-r0.apk
    ```
 
 5. In the same terminal, delete the uploaded file and restart the reMarkable interface so AppLoad
    notices the new app:
 
    ```sh
-   rm /home/root/libby-reader-0.3.0-r0.apk
+   rm /home/root/libby-reader-0.3.1-r0.apk
    /home/root/xovi/start
    ```
 
@@ -96,7 +97,9 @@ Other ways to install, signature checking and removal:
 
 ## Status
 
-Tested on one device: Paper Pro Move, OS 3.27.3, against Libby as it was in October 2026. Libby's
+Tested on one device: Paper Pro Move, OS 3.27.3, against Libby as it was in October 2026. The
+Paper Pro is expected to work (the app detects the device and sizes its window to match) but is
+untested; the Paper Pro Pure is not supported. Libby's
 web app can change at any time and break this. Known gaps are listed at the end of
 [docs/libby-wrapper.md](docs/libby-wrapper.md). Upstream's Paper Pro behaviour outside Libby is
 meant to be unchanged, but has not been re-tested on a Paper Pro.
