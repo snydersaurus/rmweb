@@ -2889,6 +2889,14 @@ public:
     void forceNextContent() {
         m_forceContentPresent = true;
         m_contentFlush.stop();
+        m_actionUs = g_get_monotonic_time();   // [perf]: time frames and presents from this user action
+    }
+    // [perf] timing for the few seconds after a user action (page turn, tap): one line per frame
+    // WebKit hands us and per content present, as milliseconds since the action.
+    int perfMs() const {
+        if (!m_actionUs) return -1;
+        const gint64 dt = (g_get_monotonic_time() - m_actionUs) / 1000;
+        return dt <= 5000 ? int(dt) : -1;
     }
     // Shutdown drain (⏻ button / SIGTERM clean path): cancel a pending settle flash, then wait out an
     // in-flight present — the panel must not be abandoned mid-waveform (community report: libqsgepaper
@@ -3291,6 +3299,7 @@ public Q_SLOTS:
         const gint64 minUs = static_cast<gint64>(m_contentMinPresentMs) * 1000LL;
         if (m_forceContentPresent || m_lastContentPresentUs == 0 ||
             (now - m_lastContentPresentUs) >= minUs) {
+            if (const int ms = perfMs(); ms >= 0) qInfo("[perf] frame +%d ms -> present now%s", ms, m_forceContentPresent ? " (forced)" : "");
             m_forceContentPresent = false;
             m_contentFlush.stop();
             schedule(/*guardTouch=*/true);
@@ -3298,6 +3307,7 @@ public Q_SLOTS:
         }
         // Coalesce: present the newest pending after the remaining wait.
         const int waitMs = static_cast<int>((minUs - (now - m_lastContentPresentUs) + 999) / 1000);
+        if (const int ms = perfMs(); ms >= 0) qInfo("[perf] frame +%d ms -> held %d ms by the content throttle", ms, waitMs);
         if (!m_contentFlush.isActive())
             m_contentFlush.start(std::max(50, waitMs));
     }
@@ -3813,6 +3823,7 @@ private:
         blockSigterm(true);   // the vendor EPDC path crashes if SIGTERM interrupts a present (EINTR)
         m_clock.restart();
         if (hadContent) m_lastContentPresentUs = g_get_monotonic_time();
+        if (hadContent) if (const int ms = perfMs(); ms >= 0) qInfo("[perf] present +%d ms", ms);
         m_lastPresentGuarded = m_nextGuardTouch;
         if (m_nextGuardTouch) bumpTouchGuard();  // content/chrome present: blank phantom noise
         m_nextGuardTouch = false;
@@ -3869,6 +3880,7 @@ private:
     static const int kKbFlushMs = 120;           // coalesce keystrokes; one e-ink paint after typing pause
     int m_dwellMs = 200;                         // min present spacing, ms (RMWEB_PRESENT_DWELL overrides)
     int m_contentMinPresentMs = 1200;            // SPA frame-storm throttle (RMWEB_CONTENT_PRESENT_MS)
+    gint64 m_actionUs = 0;                       // last forceNextContent (a user action), for [perf] lines
     bool m_hasPending = false, m_inFlight = false, m_dirty = false;
     bool m_exiting = false;                      // drainForExit ran: setImage/schedule/presentNext no-op
     bool m_partial = false;                      // content region presents — opt-in RMWEB_PARTIAL=1 (vendor storms); editing is always regional

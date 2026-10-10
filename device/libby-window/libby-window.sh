@@ -25,6 +25,9 @@ if [ ! -e /usr/libexec/wpe-webkit-2.0 ]; then
 fi
 # shellcheck source=/dev/null
 . "$R/rmweb-env.sh"
+# Optional local tuning (not shipped): KEY=value lines, e.g. RMWEB_CONTENT_PRESENT_MS=300.
+# shellcheck source=/dev/null
+[ -f "$W/tuning.env" ] && set -a && . "$W/tuning.env" && set +a
 # No panel of our own: Qt is only used for painting into the window's framebuffer.
 export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software
 exec "$BIN" "https://libbyapp.com/shelf" >> "$LOG" 2>&1
