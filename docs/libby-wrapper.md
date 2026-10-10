@@ -12,6 +12,7 @@ All in `engine/wpeqt/main.cpp` unless noted.
 | Area | Change |
 |---|---|
 | Page turns | On `libbyapp.com/open/...` swipes (now also horizontal, `gesture.h`) and edge taps send a real Left/Right key through `wpe_view_event`. Libby's reader lives in a cross-origin frame and ignores rmweb's scroll JS. |
+| Magazines | On `/open/magazine/` an up/down swipe scrolls (real wheel event) and edge taps go to the page, so Libby's buttons near the edges (Done) work. In an article (a story frame over the pages) a sideways swipe clicks Done, the chapter bar's next/previous button and Article, built-in frame script `kArticleTurnJs`. |
 | Swipe distances | Scaled to the panel (`gestureParamsFor`: 13% of the width sideways, 11% of the height vertically), and a quick one-way flick counts even when short, so swipes that start on the bezel turn the page. Every non-tap contact is logged as `[gesture]`. |
 | Typed notes | Text fields inside Libby's reader frame (the note box) report focus through a small child-frame script; our keyboard opens on the field and Go types the text as real key presses after a select-all. |
 | Taps | A tap the JS probe can't resolve is replayed as a real pointer click, so Libby's overlay and in-book controls respond. |
@@ -111,6 +112,9 @@ shared with a plain rmweb install if one exists, so a Libby sign-in carries over
   unproven.
 - Changing the font with a book open may leave Libby's page breaks slightly off until the book is
   reopened.
+- Page turns take about 0.5 to 1 s, almost all of it WebKit drawing the page on the CPU; the
+  1.2 s content throttle only delays an occasional follow-up frame (measured 2026-10-10, 300 ms
+  made no difference).
 - Pen input and pen highlighting exist only in window mode; the full-screen launcher reads
   fingers only.
 - AppLoad has no dock: a minimised window is a small bar left on screen, and tapping the icon of a

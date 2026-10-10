@@ -29,6 +29,7 @@ XOVI/AppLoad for the launcher icon, and a library card.
   minimised Libby keeps your book open while you use your notebooks.
 - **Page turns and taps in Libby's reader.** Swipes and edge taps are sent as real arrow keys, and
   taps as real clicks, because the reader ignores rmweb's script-driven scrolling.
+- **Magazines.** Swipe up and down to scroll an article, sideways for the next or previous article.
 - **Pen highlights.** Hold the pen on a word until it highlights, drag, lift, then tap Highlight.
   Highlights and notes are Libby's own, so they sync to your other devices.
 - **Working lists and search.** Real scroll events for Libby's self-filling lists; Enter is sent

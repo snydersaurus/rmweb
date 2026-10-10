@@ -478,6 +478,25 @@ public Q_SLOTS:
                     Q_EMIT self->fieldFocused(value, false, QString());
                 }), this);
             webkit_user_content_manager_register_script_message_handler(m_ucm, "rmwebField", nullptr);
+            // Magazine articles: Libby shows an article as a scrolling story frame over the magazine's
+            // pages, where an arrow key does nothing. A sideways swipe there (our arrow key) closes the
+            // article (Done), jumps to the next/previous chapter (one per article) and opens its article.
+            // Closing destroys the story frame and its timers, so the later steps run on the reader page.
+            static const char *kArticleTurnJs =
+                "(function(){if(window.top===window||!/\\/stories\\//.test(location.pathname))return;"
+                "window.addEventListener('keydown',function(e){"
+                "if(!e.isTrusted||(e.key!=='ArrowRight'&&e.key!=='ArrowLeft'))return;"
+                "var d;try{d=window.parent.document;}catch(x){return;}"
+                "var done=d.querySelector('.article-controls-hide-button'),"
+                "jump=d.querySelector(e.key==='ArrowRight'?'.chapter-bar-next-button':'.chapter-bar-prev-button');"
+                "if(!done||!jump)return;e.preventDefault();e.stopPropagation();"
+                "var w=d.defaultView;done.click();"
+                "w.setTimeout(function(){jump.click();w.setTimeout(function(){"
+                "var a=d.querySelector('.article-hint-button');if(a)a.click();},1200);},600);},true);})();";
+            WebKitUserScript *as = webkit_user_script_new(kArticleTurnJs, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+                WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_END, nullptr, nullptr);
+            webkit_user_content_manager_add_script(m_ucm, as);
+            webkit_user_script_unref(as);
         }
         // Readability user stylesheet (kSiteCss): keep wide media/tables from forcing horizontal scroll on the
         // narrow viewport. Applies to every page; reader mode replaces the DOM so it's harmless there too.
@@ -1376,6 +1395,7 @@ public Q_SLOTS:
     void pageNext()  { pageBy(+1); }   // façade page-turn (wraps the scroll+repaint in pageBy;
     void pagePrev()  { pageBy(-1); }   // only dy's sign matters — the JS picks the actual step)
     bool keyPaging() const { return m_keyPaging.load(std::memory_order_acquire); }
+    bool magazine() const { return m_magazine.load(std::memory_order_acquire); }
     // Libby mode: while the toolbar is showing, push the page down by the bar's height so it does not
     // cover the site's own top-row controls. Done with a top-frame user stylesheet (the page's root
     // becomes a shorter box that also contains its fixed-position children) rather than by resizing
@@ -1594,6 +1614,9 @@ public Q_SLOTS:
     static bool keyPagingUrl(const char *uri) {
         return libbyUrl(uri) && std::string(uri).find("/open/") != std::string::npos;
     }
+    static bool magazineUrl(const char *uri) {
+        return libbyUrl(uri) && std::string(uri).find("/open/magazine/") != std::string::npos;
+    }
     // Deliver a REAL Right/Left arrow key press to the page through WPE's input path (worker thread).
     // Everything else in this shell drives the page with synthetic JS; a trusted key event is what a
     // web reader's own keyboard handler expects.
@@ -1788,6 +1811,15 @@ private:
     static gboolean onPage(gpointer d) {
         auto *m = static_cast<PageMsg*>(d);
         WpeEngine *self = m->self;
+        // Libby's magazine reader shows articles as one long scrolling text: there an up/down swipe
+        // scrolls (a real wheel event) and sideways swipes still turn pages.
+        if (self->m_view && magazineUrl(webkit_web_view_get_uri(self->m_view))) {
+            if (WPEView *v = webkit_web_view_get_wpe_view(self->m_view)) {
+                const double w = wpe_view_get_width(v), h = wpe_view_get_height(v);
+                self->sendWheel(w / 2, h / 2, (m->dy > 0 ? -1 : 1) * 0.28 * h);
+            }
+            return G_SOURCE_REMOVE;
+        }
         // Paginated web readers turn their own pages — hand them an arrow key instead of scrolling.
         if (self->m_view && keyPagingUrl(webkit_web_view_get_uri(self->m_view))) {
             self->sendPageKey(m->dy > 0 ? +1 : -1);
@@ -2169,6 +2201,7 @@ private:
         const char *u = webkit_web_view_get_uri(WEBKIT_WEB_VIEW(obj));
         qInfo("[nav] uri=%s", u ? u : "");
         self->m_keyPaging.store(keyPagingUrl(u), std::memory_order_release);
+        self->m_magazine.store(magazineUrl(u), std::memory_order_release);
         self->applyTopInset();
         if (libbyUrl(u)) self->probeLibbyTls();
         // Generated pages loaded with an about:blank base (address-bar search results) must not
@@ -2794,6 +2827,7 @@ private:
     double m_insetZoom = 0;                         // zoom the inset sheet was computed for
     int m_bookFont = 0;                             // index into kBookFonts (0 = the book's own typeface)
     WebKitUserStyleSheet *m_fontSheet = nullptr;    // the installed book-typeface sheet (we hold a ref)
+    std::atomic<bool> m_magazine{false};            // Libby magazine reader (GUI reads it)
     std::atomic<bool> m_keyPaging{false};           // current page is a self-paginating reader (GUI reads it)
     int m_lastTapX = 0, m_lastTapY = 0;             // panel px of the last content tap probe (worker thread)
     std::string m_dbgLast;                          // RMWEB_DEBUG_JSFILE: last script body run (worker thread)
@@ -4725,7 +4759,9 @@ int main(int argc, char **argv) {
                 // Page-turn zones: when chrome is HIDDEN use left/right edges (reading mode).
                 // When chrome is SHOWN, edges would steal link taps — only swipe pages then.
                 // Swipe always pages (connected above).
-                if (!view->chromeOn()) {
+                // Libby's magazine reader keeps buttons (Done, article links) near the edges, so there
+                // every tap goes to the page and only swipes turn pages.
+                if (!view->chromeOn() && !engine.magazine()) {
                     rmweb::TapZones z;
                     z.edgeFrac = 0.15;   // 15% edges (was 22% — too greedy, ate link taps)
                     const auto a = rmweb::classifyTap(x, y, kPanelW, kPanelH, z);
