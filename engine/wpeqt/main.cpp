@@ -482,6 +482,7 @@ public Q_SLOTS:
             // pages, where an arrow key does nothing. A sideways swipe there (our arrow key) closes the
             // article (Done), jumps to the next/previous chapter (one per article) and opens its article.
             // Closing destroys the story frame and its timers, so the later steps run on the reader page.
+            // (Fixed waits of 0.6 s + 1.2 s worked on device; polling for the frame to go is quicker.)
             static const char *kArticleTurnJs =
                 "(function(){if(window.top===window||!/\\/stories\\//.test(location.pathname))return;"
                 "window.addEventListener('keydown',function(e){"
@@ -490,9 +491,14 @@ public Q_SLOTS:
                 "var done=d.querySelector('.article-controls-hide-button'),"
                 "jump=d.querySelector(e.key==='ArrowRight'?'.chapter-bar-next-button':'.chapter-bar-prev-button');"
                 "if(!done||!jump)return;e.preventDefault();e.stopPropagation();"
-                "var w=d.defaultView;done.click();"
-                "w.setTimeout(function(){jump.click();w.setTimeout(function(){"
-                "var a=d.querySelector('.article-hint-button');if(a)a.click();},1200);},600);},true);})();";
+                "var w=d.defaultView,t0=Date.now();done.click();"
+                // Jump as soon as the story frame is gone (polled, at most 1.5 s), then reopen.
+                "var open=function(){var fs=d.querySelectorAll('iframe');"
+                "for(var i=0;i<fs.length;i++){try{if(/\\/stories\\//.test(fs[i].contentWindow.location.pathname))return true;}catch(x){}}"
+                "return false;};"
+                "(function wait(){if(open()&&Date.now()-t0<1500){w.setTimeout(wait,80);return;}"
+                "jump.click();w.setTimeout(function(){"
+                "var a=d.querySelector('.article-hint-button');if(a)a.click();},500);})();},true);})();";
             WebKitUserScript *as = webkit_user_script_new(kArticleTurnJs, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
                 WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_END, nullptr, nullptr);
             webkit_user_content_manager_add_script(m_ucm, as);
