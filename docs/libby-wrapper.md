@@ -14,7 +14,7 @@ All in `engine/wpeqt/main.cpp` unless noted.
 | Page turns | On `libbyapp.com/open/...` swipes (now also horizontal, `gesture.h`) and edge taps send a real Left/Right key through `wpe_view_event`. Libby's reader lives in a cross-origin frame and ignores rmweb's scroll JS. |
 | Magazines | On `/open/magazine/` an up/down swipe scrolls (real wheel event) and edge taps go to the page, so Libby's buttons near the edges (Done) work. In an article (a story frame over the pages) a sideways swipe clicks Done, the chapter bar's next/previous button and Article, built-in frame script `kArticleTurnJs`. |
 | Swipe distances | Scaled to the panel (`gestureParamsFor`: 13% of the width sideways, 11% of the height vertically), and a quick one-way flick counts even when short, so swipes that start on the bezel turn the page. Every non-tap contact is logged as `[gesture]`. |
-| Typed notes | Text fields inside Libby's reader frame (the note box) report focus through a small child-frame script; our keyboard opens on the field and Go types the text as real key presses after a select-all. |
+| Typed notes and PIN | Password fields (the library PIN box) are typed the same way and never saved. Text fields inside Libby's reader frame (the note box) report focus through a small child-frame script; our keyboard opens on the field and Go types the text as real key presses after a select-all. |
 | Taps | A tap the JS probe can't resolve is replayed as a real pointer click, so Libby's overlay and in-book controls respond. |
 | List scrolling | On other Libby pages a swipe sends a real precise wheel event; the lazy result lists stay blank under the scroll/untrap JS. |
 | Search | Go in a search-style field is followed by a real Return key. |
@@ -56,7 +56,7 @@ is in `LIBBY_VERSION`.
 Install without this repo: unpack the release tarball into AppLoad's folder on the tablet.
 
 ```sh
-ssh root@10.11.99.1 'tar -C /home/root/xovi/exthome/appload -xzf -' < libby-0.3.2.tar.gz
+ssh root@10.11.99.1 'tar -C /home/root/xovi/exthome/appload -xzf -' < libby-0.3.3.tar.gz
 ```
 
 Then restart xochitl through XOVI (or reboot and re-enable XOVI) so AppLoad sees the new icon.

@@ -1284,7 +1284,7 @@ public Q_SLOTS:
             ++n;
         }
         if (text.isEmpty()) key(WPE_KEY_BackSpace, KEY_BACKSPACE + 8, static_cast<WPEModifiers>(0));   // empty Go clears
-        qInfo("[form] typed %d characters into the focused frame field", n);
+        qInfo("[form] typed %d characters into the focused field", n);
     }
     void setFieldText(const QString &text) {
         marshalToCtx([this, text] {
@@ -1979,6 +1979,11 @@ private:
                         if (suggest.isEmpty() && pw) suggest = QString::fromStdString(pw->user);
                     } else if (kind == rmweb::FieldKind::Name) suggest = QString::fromStdString(self->m_settings.autofillName);
                 }
+                // Libby's PIN box: the password commit below swaps in a clone of the input, which Libby
+                // never sees (it keeps the original element), so Verify finds it empty. The probe has
+                // just focused the field: Go types into it with real key presses instead, the same path
+                // as frame fields. Nothing is saved to the password store on this path.
+                if (g_libbyMode && pr.masked) self->m_frameField = true;
                 Q_EMIT self->fieldFocused(QString::fromStdString(pr.value), pr.masked, suggest);
                 break;
             }
