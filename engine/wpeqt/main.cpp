@@ -267,7 +267,11 @@ static const char *kMobileUA =
 static const char *kSiteCss =
     "img,video,iframe,table,pre,figure,canvas{max-width:100%!important}"
     "img,video{height:auto!important}"
-    "html,body{overflow-x:hidden!important}"
+    // Root only: overflow on <html> moves to the viewport, which is all that's needed to stop sideways
+    // scrolling. Clipping <body> as well broke Libby's book reader: a chapter is one wide strip of
+    // CSS columns, and with a clipped body WebKit drew only the first column, so some chapters showed
+    // blank pages after page 1 (found on device 2026-11-12, Hardy Boys ch. XII).
+    "html{overflow-x:hidden!important}"
     "*,*::before,*::after{animation-duration:0s!important;animation-delay:0s!important;"
     "transition-duration:0s!important;transition-delay:0s!important;scroll-behavior:auto!important}";
 
